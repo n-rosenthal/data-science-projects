@@ -1,0 +1,277 @@
+% Created 2026-04-24 sex 22:59
+% Intended LaTeX compiler: xelatex
+\documentclass[11pt]{article}
+\usepackage{graphicx}
+\usepackage{longtable}
+\usepackage{wrapfig}
+\usepackage{rotating}
+\usepackage[normalem]{ulem}
+\usepackage{capt-of}
+\usepackage{hyperref}
+\date{2026}
+\title{Lab 05 — Predição de Preços de Imóveis\\\medskip
+\large Documentação da Solução Vencedora}
+\hypersetup{
+ pdfauthor={},
+ pdftitle={Lab 05 — Predição de Preços de Imóveis},
+ pdfkeywords={},
+ pdfsubject={},
+ pdfcreator={Emacs 30.2 (Org mode 9.7.11)}, 
+ pdflang={English}}
+\begin{document}
+
+\maketitle
+\setcounter{tocdepth}{2}
+\tableofcontents
+
+\section{Visão Geral}
+\label{sec:org18ea467}
+
+O problema consiste em prever o preço de venda de imóveis residenciais
+(dataset Ames Housing) a partir de 79 variáveis descritivas. A métrica
+de avaliação é o RMSE calculado sobre \texttt{log(SalePrice)}.
+
+\begin{center}
+\begin{tabular}{lll}
+Métrica & Baseline (regressão linear) & Solução final\\
+\hline
+RMSE\_LOG OOF & \textasciitilde{}0.23 & 0.1140\\
+Posição & — & 1º lugar\\
+\end{tabular}
+\end{center}
+
+A solução é um \textbf{stacking ensemble} de dois níveis: cinco modelos de
+gradient boosting como camada base e um blend de RidgeCV + ElasticNet
+como meta-modelo.
+\section{Pré-processamento}
+\label{sec:org332e0c5}
+
+\subsection{Remoção de Outliers}
+\label{sec:orgfdda29f}
+
+Antes de qualquer modelagem, quatro filtros são aplicados ao conjunto
+de treino para eliminar observações atípicas que distorceriam o
+aprendizado:
+
+\begin{verbatim}
+train_df = train_df[train_df["GrLivArea"] < 4500]
+train_df = train_df[~((train_df["GrLivArea"] > 4000) & (train_df["SalePrice"] < 200000))]
+train_df = train_df[train_df["LotArea"] < 100000]
+train_df = train_df[train_df["TotalBsmtSF"] < 6000]
+\end{verbatim}
+
+O segundo filtro é especialmente importante: remove casas grandes
+vendidas a preço baixo, que são anomalias conhecidas do dataset Ames e
+prejudicam modelos de árvore.
+\subsection{Transformação da Variável Alvo}
+\label{sec:org025655d}
+
+O target \texttt{SalePrice} é transformado com \texttt{log1p} antes do treino:
+
+\begin{verbatim}
+y = np.log1p(train_df["SalePrice"])
+\end{verbatim}
+
+Isso aproxima a distribuição da normal, reduz a influência de valores
+extremos e é o formato esperado na submissão — as predições são
+entregues em escala logarítmica, sem reverter com \texttt{expm1}.
+\subsection{Imputação Contextual}
+\label{sec:org88a79f4}
+
+Em vez de imputação genérica por mediana, os valores ausentes são
+tratados com base no domínio do problema:
+
+\begin{itemize}
+\item \textbf{Categóricas de ausência semântica} (ex: \texttt{GarageType}, \texttt{PoolQC}): NaN
+significa que o imóvel não possui aquela característica, portanto
+preenchidos com a string \texttt{"None"}.
+
+\item \textbf{Numéricas de área ou contagem} (ex: \texttt{GarageArea}, \texttt{BsmtFinSF1}):
+imóveis sem garagem ou porão têm área zero, portanto preenchidos
+com \texttt{0}.
+
+\item \textbf{Demais numéricas}: imputação por mediana dentro de cada fold de
+validação cruzada, usando \texttt{SimpleImputer}.
+\end{itemize}
+\section{Feature Engineering}
+\label{sec:org287a936}
+
+A função \texttt{add\_features} expande o conjunto original de 80 para 103
+features, agrupadas em quatro categorias:
+\subsection{Agregações de Área}
+\label{sec:org4e94e8e}
+
+\begin{verbatim}
+df["TotalSF"]    = df["TotalBsmtSF"] + df["1stFlrSF"] + df["2ndFlrSF"]
+df["TotalPorchSF"] = df["OpenPorchSF"] + df["EnclosedPorch"] + ...
+df["TotalBathrooms"] = df["FullBath"] + 0.5*df["HalfBath"] + ...
+\end{verbatim}
+
+Capturam a área utilizável total, que é mais preditiva que qualquer
+área individual.
+\subsection{Flags Binárias de Presença}
+\label{sec:org85b3ca8}
+
+\begin{verbatim}
+df["HasPool"]      = (df["PoolArea"] > 0).astype(int)
+df["HasGarage"]    = (df["GarageArea"] > 0).astype(int)
+df["HasBsmt"]      = (df["TotalBsmtSF"] > 0).astype(int)
+df["HasFireplace"] = (df["Fireplaces"] > 0).astype(int)
+df["IsRemodeled"]  = (df["YearRemodAdd"] != df["YearBuilt"]).astype(int)
+df["IsNew"]        = (df["YrSold"] == df["YearBuilt"]).astype(int)
+\end{verbatim}
+
+Modelos de árvore beneficiam-se de splits binários explícitos quando a
+distinção presença/ausência é mais relevante que a magnitude.
+\subsection{Interações Multiplicativas}
+\label{sec:orgb17fea7}
+
+\begin{verbatim}
+df["OverallQual_TotalSF"]   = df["OverallQual"] * df["TotalSF"]
+df["OverallQual_GrLivArea"] = df["OverallQual"] * df["GrLivArea"]
+df["OverallQual_sq"]        = df["OverallQual"] ** 2
+df["QualCondScore"]         = df["OverallQual"] * df["OverallCond"]
+\end{verbatim}
+
+\texttt{OverallQual} é a variável mais correlacionada com preço. Suas
+interações com área capturam o efeito não-linear de que qualidade
+importa proporcionalmente mais em casas grandes.
+\subsection{Transformações Logarítmicas e Temporais}
+\label{sec:orgc834dca}
+
+\begin{verbatim}
+df["LotAreaLog"]  = np.log1p(df["LotArea"])
+df["GrLivAreaLog"]= np.log1p(df["GrLivArea"])
+df["HouseAge"]    = df["YrSold"] - df["YearBuilt"]
+df["RemodAge"]    = df["YrSold"] - df["YearRemodAdd"]
+\end{verbatim}
+
+Log-transforms reduzem a skewness de variáveis de área, ajudando
+especialmente o meta-modelo linear. As features de idade capturam
+depreciação e o efeito de reformas recentes.
+\section{Encoding de Variáveis Categóricas}
+\label{sec:org9561159}
+
+As 44 variáveis categóricas são transformadas com \textbf{Target Encoding}
+dentro de cada fold:
+
+\begin{verbatim}
+enc = ce.TargetEncoder(cols=cat_cols, smoothing=10)
+enc.fit(X_tr, y_tr)
+\end{verbatim}
+
+O parâmetro \texttt{smoothing=10} é crítico: mistura a média da categoria com
+a média global proporcionalmente ao tamanho da categoria, evitando
+data leakage em categorias raras. O valor 10 (versus 0.3 do baseline)
+reduz significativamente o overfitting do encoding.
+
+O encoder é sempre fitado apenas nos dados de treino do fold e
+aplicado em validação e teste, respeitando o isolamento de
+informação da validação cruzada.
+\section{Normalização}
+\label{sec:org5974f3e}
+
+As variáveis numéricas são normalizadas com \texttt{RobustScaler} em vez de
+\texttt{StandardScaler}:
+
+\begin{verbatim}
+scaler = RobustScaler()
+\end{verbatim}
+
+\texttt{RobustScaler} usa mediana e IQR em vez de média e desvio padrão,
+tornando-o insensível a outliers remanescentes após a filtragem
+inicial.
+\section{Modelos Base}
+\label{sec:orgdfff7f0}
+
+Cinco modelos de gradient boosting com hiperparâmetros distintos
+formam a camada base do ensemble. A diversidade entre eles é
+intencional: erros não correlacionados se cancelam no stacking.
+
+\begin{center}
+\begin{tabular}{lrrrl}
+Modelo & \texttt{n\_estimators} & \texttt{learning\_rate} & \texttt{num\_leaves\textasciitilde{}/\textasciitilde{}depth} & Característica\\
+\hline
+LGB1 & 6000 & 0.005 & 31 & Conservador, balanceado\\
+LGB2 & 8000 & 0.003 & 15 & Raso, muito regularizado\\
+LGB3 & 5000 & 0.008 & 63 & Muitas folhas, agressivo\\
+Cat & 5000 & 0.007 & 6 & Melhor OOF individual\\
+XGB & 5000 & 0.005 & 5 & Complementa LGB/Cat\\
+\end{tabular}
+\end{center}
+
+OOF RMSE individuais (seed 42):
+\begin{itemize}
+\item LGB1: 0.126874
+\item LGB2: 0.123090
+\item LGB3: 0.119819
+\item CatBoost: \textbf{0.116575} (melhor)
+\item XGBoost: 0.125426
+\end{itemize}
+\section{Validação Cruzada (Out-of-Fold)}
+\label{sec:org4bc25e8}
+
+\begin{verbatim}
+kf = KFold(n_splits=10, shuffle=True, random_state=42)
+\end{verbatim}
+
+10 folds foram utilizados em vez dos 5 do baseline por dois motivos:
+cada modelo é avaliado em 10 conjuntos distintos, reduzindo a
+variância da estimativa de RMSE; e cada modelo de treino usa 90\% dos
+dados em vez de 80\%, gerando predições mais fortes.
+
+As predições Out-of-Fold (OOF) são usadas como features para o
+meta-modelo, garantindo que o meta-modelo nunca veja predições feitas
+sobre dados em que o modelo base foi treinado.
+\section{Meta-Modelo (Stacking)}
+\label{sec:org3c95745}
+
+As predições OOF dos cinco modelos base formam uma matriz de entrada
+para dois meta-modelos:
+
+\begin{verbatim}
+# Meta 1
+meta_ridge = RidgeCV(alphas=np.logspace(-4, 2, 50), cv=10)
+meta_ridge.fit(X_meta, y)   # RMSE: 0.113588
+
+# Meta 2
+meta_en = ElasticNet(alpha=0.0003, l1_ratio=0.5, max_iter=50000)
+meta_en.fit(X_meta, y)      # RMSE: 0.114635
+
+# Blend final (50/50)
+final = 0.5 * meta_ridge.predict(...) + 0.5 * meta_en.predict(...)
+# RMSE: 0.113965
+\end{verbatim}
+
+\texttt{RidgeCV} seleciona automaticamente o melhor \texttt{alpha} entre 50 valores
+via cross-validation interna. O blend 50/50 com ElasticNet reduz
+ligeiramente a variância da predição final em relação a usar apenas um
+dos dois.
+\section{Resultado Final}
+\label{sec:org95c64c8}
+
+\begin{verbatim}
+★ OOF RMSE FINAL (blend meta): 0.113965
+★ OOF RMSE FINAL (média direta): 0.119427
+→ Usando blend de metas (melhor)
+\end{verbatim}
+
+A submissão contém os valores preditos diretamente em escala
+\texttt{log1p(SalePrice)}, que é o formato esperado pela competição.
+\section{Resumo das Decisões de Design}
+\label{sec:orgf9a4b72}
+
+\begin{center}
+\begin{tabular}{lll}
+Decisão & Alternativa descartada & Motivo\\
+\hline
+Imputação contextual por domínio & Mediana global & NaN em GarageArea significa 0, não mediana\\
+RobustScaler & StandardScaler & Mais estável com outliers remanescentes\\
+TargetEncoding smoothing=10 & smoothing=0.3 & Menos leakage em categorias raras\\
+10-fold CV & 5-fold & Menor variância, mais dados por treino\\
+5 modelos heterogêneos & Apenas LightGBM & Erros não correlacionados melhoram o blend\\
+RidgeCV como meta & ElasticNet puro & Seleção automática de alpha, mais estável\\
+Predição em log scale & \texttt{expm1} antes de submeter & Formato exigido pela competição\\
+\end{tabular}
+\end{center}
+\end{document}

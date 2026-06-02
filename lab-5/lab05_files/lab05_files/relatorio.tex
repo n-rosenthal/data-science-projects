@@ -1,0 +1,432 @@
+% Created 2026-05-07 qui 08:30
+% Intended LaTeX compiler: xelatex
+\documentclass[12pt,a4paper]{article}
+\usepackage{graphicx}
+\usepackage{longtable}
+\usepackage{wrapfig}
+\usepackage{rotating}
+\usepackage[normalem]{ulem}
+\usepackage{capt-of}
+\usepackage{hyperref}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[brazil, brazilian]{babel}
+\usepackage[top=2.5cm,bottom=2.5cm,left=3cm,right=2.5cm]{geometry}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{minted}
+\setminted{fontsize=\small, linenos=false, breaklines=true, bgcolor=gray!6}
+\usepackage[colorlinks=true, linkcolor=black, urlcolor=blue, citecolor=black]{hyperref}
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small INF01090 — Ciência de Dados}
+\fancyhead[R]{\small Laboratório 5}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\usepackage{setspace}
+\setstretch{1.15}
+\usepackage{fancyvrb}
+\usepackage{etoolbox}
+\AtBeginDocument{\setlength{\parskip}{4pt}}
+\author{Nícolas Rosenthal Dal Corso}
+\date{Ciência de Dados (INF 01090/2026) \\\\ May, 2026}
+\title{Laboratório 5 \\ Relatório}
+\hypersetup{
+ pdfauthor={Nícolas Rosenthal Dal Corso},
+ pdftitle={Laboratório 5 \\ Relatório},
+ pdfkeywords={},
+ pdfsubject={},
+ pdfcreator={Emacs 30.2 (Org mode 9.7.11)}, 
+ pdflang={Portuges}}
+\begin{document}
+
+\maketitle
+\setcounter{tocdepth}{3}
+\tableofcontents
+
+\section{Visão Geral}
+\label{sec:org740da2d}
+
+Este relatório descreve a implementação do \emph{pipeline} de predição de preços de
+imóveis desenvolvido para a competição \emph{House Prices - Advanced Regression
+Techniques} (Kaggle), adaptada para o conjunto de dados de avaliação da
+disciplina \texttt{INF01090/2026}.
+
+O modelo final é um \textbf{stack ensemble} de dois níveis com meta-blending via
+Optuna, cujo OOF RMSE (em escala log) obtido foi de \textbf{0.112577}.
+
+Todas as submissões ocorreram sob o nome \texttt{n-rosenthal}.
+\section{Dados e Pré-processamento}
+\label{sec:orgba46b6b}
+
+\subsection{Conjunto de Dados}
+\label{sec:org8b6382b}
+
+\begin{center}
+\begin{tabular}{ll}
+Atributo & Valor\\
+\hline
+Linhas (treino) & 1 016 (após remoção de outliers)\\
+Linhas (teste) & 438\\
+Features brutas & 80 variáveis\\
+Features finais & 125 (após engenharia)\\
+Target & \texttt{SalePrice} (numérica, contínua)\\
+\end{tabular}
+\end{center}
+\subsection{Remoção de Outliers}
+\label{sec:orgcb8dd11}
+
+Cinco regras de filtragem foram aplicadas sobre o conjunto de treino:
+
+\begin{verbatim}
+train_df = train_df[train_df["GrLivArea"] < 4500]
+train_df = train_df[~((train_df["GrLivArea"] > 4000) & (train_df["SalePrice"] < 200_000))]
+train_df = train_df[train_df["LotArea"] < 100_000]
+train_df = train_df[train_df["TotalBsmtSF"] < 6_000]
+train_df = train_df[~((train_df["OverallQual"] <= 4) & (train_df["SalePrice"] > 300_000))]
+\end{verbatim}
+
+Essas regras removem imóveis com \emph{living area} muito grande, lotes
+exageradamente grandes e combinações de baixa qualidade com preço alto, que
+distorceriam o aprendizado.
+\subsection{Transformação da Target}
+\label{sec:orgdc91d38}
+
+O preço de venda (\texttt{SalePrice}) foi transformado via \texttt{log1p} antes do
+treinamento e revertido via \texttt{expm1} nas predições finais. Isso reduz a
+assimetria da distribuição e estabiliza o treinamento dos modelos de boosting.
+\subsection{Correção de Tipos}
+\label{sec:org1667ff4}
+
+\texttt{MSSubClass}, \texttt{MoSold} e \texttt{YrSold} são variáveis \textbf{nominais}, não números
+contínuos. A conversão para \texttt{string} é feita \textbf{antes} da separação entre
+\texttt{cat\_cols} e \texttt{num\_cols}, garantindo que sejam tratadas como categorias pelo
+\texttt{TargetEncoder} e não como grandezas ordenadas.
+
+\begin{verbatim}
+def fix_dtypes(df):
+    for col in ["MSSubClass", "MoSold", "YrSold"]:
+        if col in df.columns:
+            df[col] = df[col].astype(str)
+    return df
+\end{verbatim}
+\subsection{Imputação de Valores Ausentes}
+\label{sec:org40d6b3c}
+
+Duas estratégias foram adotadas:
+
+\begin{itemize}
+\item \textbf{Colunas categóricas sem valor} (\texttt{Alley}, \texttt{MasVnrType}, \texttt{MiscFeature}):
+preenchidas com a string \texttt{"None"}, que é mapeada para 0 nos encodings
+ordinais.
+
+\item \textbf{Colunas numéricas} (\texttt{MasVnrArea}, \texttt{BsmtFinSF1/2}, \texttt{GarageArea}, etc.):
+preenchidas com \texttt{0}, representando ausência do atributo.
+
+\item \textbf{\texttt{GarageYrBlt}}: imputado com \texttt{YearBuilt} do próprio imóvel (não com \texttt{0},
+que geraria um ano inválido e introduziria viés semântico).
+\end{itemize}
+
+\begin{verbatim}
+mask = df["GarageYrBlt"].isna()
+df.loc[mask, "GarageYrBlt"] = df.loc[mask, "YearBuilt"]
+\end{verbatim}
+\subsection{Encoding Ordinal}
+\label{sec:org6cd0c2c}
+
+Variáveis de qualidade com escala natural (\texttt{Ex > Gd > TA > Fa > Po}) foram
+codificadas numericamente por mapeamento direto, evitando que o modelo trate
+categorias ordenadas como nominais:
+
+\begin{center}
+\begin{tabular}{ll}
+Coluna & Escala\\
+\hline
+\texttt{ExterQual} & Ex=5, Gd=4, TA=3, Fa=2, Po=1, NA=0\\
+\texttt{BsmtQual} & (idem acima)\\
+\texttt{KitchenQual} & (idem acima)\\
+\texttt{BsmtFinType1} & GLQ=6, ALQ=5, … Unf=1, NA=0\\
+\texttt{BsmtExposure} & Gd=4, Av=3, Mn=2, No=1, NA=0\\
+\texttt{Functional} & Typ=8, Min1=7, … Sal=1\\
+\texttt{GarageFinish} & Fin=3, RFn=2, Unf=1, NA=0\\
+\end{tabular}
+\end{center}
+\section{Engenharia de Features}
+\label{sec:org4f9480b}
+
+Foram criadas 45 features adicionais, organizadas em sete grupos:
+\subsection{Área Total e Contagens}
+\label{sec:org101d0ee}
+
+\begin{verbatim}
+df["TotalSF"]        = df["TotalBsmtSF"] + df["1stFlrSF"] + df["2ndFlrSF"]
+df["TotalBathrooms"] = df["FullBath"] + 0.5*df["HalfBath"] + \
+                       df["BsmtFullBath"] + 0.5*df["BsmtHalfBath"]
+df["TotalPorchSF"]   = df["OpenPorchSF"] + df["EnclosedPorch"] + \
+                       df["3SsnPorch"]   + df["ScreenPorch"]
+df["GarageScore"]    = df["GarageCars"] * df["GarageArea"]
+\end{verbatim}
+\subsection{Features Temporais}
+\label{sec:org577b28c}
+
+\begin{verbatim}
+df["HouseAge"]       = df["YrSold"].astype(int) - df["YearBuilt"]
+df["RemodAge"]       = df["YrSold"].astype(int) - df["YearRemodAdd"]
+df["TimeSinceRemod"] = df["YrSold"].astype(int) - df["YearRemodAdd"]
+df["IsNew"]          = (df["YrSold"].astype(int) == df["YearBuilt"]).astype(int)
+df["IsRemodeled"]    = (df["YearRemodAdd"] != df["YearBuilt"]).astype(int)
+\end{verbatim}
+\subsection{Flags Binárias}
+\label{sec:orgf539038}
+
+Nove flags indicam presença/ausência de atributos importantes:
+\texttt{HasPool}, \texttt{Has2ndFloor}, \texttt{HasGarage}, \texttt{HasBsmt}, \texttt{HasFireplace},
+\texttt{IsRemodeled}, \texttt{IsNew}, \texttt{HasMasVnr}, \texttt{HasPorch}.
+\subsection{Interações Multiplicativas}
+\label{sec:orgad435f1}
+
+\begin{verbatim}
+df["OverallQual_TotalSF"]   = df["OverallQual"] * df["TotalSF"]
+df["OverallQual_GrLivArea"] = df["OverallQual"] * df["GrLivArea"]
+df["OverallQual_sq"]        = df["OverallQual"] ** 2
+df["QualCondScore"]         = df["OverallQual"] * df["OverallCond"]
+df["QualAge"]               = df["OverallQual"] / df["HouseAge"].clip(1)
+df["NewAndQual"]            = df["IsNew"] * df["OverallQual"]
+\end{verbatim}
+\subsection{Log-Transforms de Features Assimétricas}
+\label{sec:org16fb799}
+
+\begin{verbatim}
+df["LotAreaLog"]    = np.log1p(df["LotArea"])
+df["GrLivAreaLog"]  = np.log1p(df["GrLivArea"])
+df["TotalSFLog"]    = np.log1p(df["TotalSF"])
+df["GarageAreaLog"] = np.log1p(df["GarageArea"])
+\end{verbatim}
+\subsection{Razões (\emph{Ratios})}
+\label{sec:org69fdc3c}
+
+\begin{verbatim}
+df["LivAreaRatio"]   = df["GrLivArea"]   / df["TotalSF"].clip(1)
+df["BsmtRatio"]      = df["TotalBsmtSF"] / df["TotalSF"].clip(1)
+df["GarageRatio"]    = df["GarageArea"]  / df["GrLivArea"].clip(1)
+df["LotFrontRatio"]  = df["LotFrontage"].fillna(0) / df["LotArea"].clip(1)
+df["BsmtFinRatio"]   = df["BsmtFinSF1"]  / df["TotalBsmtSF"].clip(1)
+df["LotAreaPerRoom"] = df["LotArea"]     / df["TotRmsAbvGrd"].clip(1)
+df["SFPerRoom"]      = df["GrLivArea"]   / df["TotRmsAbvGrd"].clip(1)
+\end{verbatim}
+\subsection{Scores Compostos}
+\label{sec:orgafdcb3b}
+
+\begin{verbatim}
+df["ExterScore"]      = df["ExterQual"]    * df["ExterCond"]
+df["KitchenScore"]    = df["KitchenQual"]  * df["GrLivArea"]
+df["FireScore"]       = df["FireplaceQu"]  * df["Fireplaces"]
+df["BsmtScore"]       = df["BsmtExposure"] * df["BsmtQual"]
+df["GarageFullScore"] = df["GarageQual"]   * df["GarageCars"]
+\end{verbatim}
+\subsection{Sazonalidade de Venda}
+\label{sec:orgca01b0e}
+
+\begin{verbatim}
+mo = df["MoSold"].astype(int)
+df["SaleSeasonQ1"] = mo.isin([1, 2, 3]).astype(int)
+# Q2, Q3, Q4 — idem
+\end{verbatim}
+\section{Arquitetura do Modelo}
+\label{sec:orgb6dca74}
+
+O \emph{pipeline} adota uma arquitetura de \textbf{stack ensemble} em dois níveis.
+\subsection{Nível 1 — Base Learners}
+\label{sec:org58ef214}
+
+Oito modelos de gradient boosting formam o primeiro nível:
+
+\begin{center}
+\begin{tabular}{llrl}
+ID & Algoritmo & Profundidade & Observações\\
+\hline
+\texttt{cat\_a} & CatBoost & 5 & Config principal; usa Optuna\\
+\texttt{cat\_b} & CatBoost & 6 & Mais árvores, LR menor\\
+\texttt{cat\_c} & CatBoost & 4 & Máxima regularização\\
+\texttt{cat\_d} & CatBoost & 7 & Lado mais profundo\\
+\texttt{cat\_e} & CatBoost (Lossguide) & 6 & Política de crescimento diferente\\
+\texttt{lgb\_best} & LightGBM & 5 & \texttt{num\_leaves=20}; usa Optuna\\
+\texttt{xgb\_best} & XGBoost & 4 & \texttt{gamma=0.1}, conservador\\
+\texttt{hgb} & HistGradBoost (sklearn) & — & Implementação ortogonal\\
+\end{tabular}
+\end{center}
+
+Os modelos \texttt{CatBoost} dominaram o ranking OOF (0.114–0.117 RMSE), enquanto
+LGB, XGB e HGB ficaram na faixa 0.124–0.126, contribuindo com diversidade ao
+ensemble.
+\subsection{Busca de Hiperparâmetros com Optuna}
+\label{sec:orgd709ed2}
+
+Os hiperparâmetros de \texttt{cat\_a} e \texttt{lgb\_best} são encontrados por busca
+bayesiana com \texttt{Optuna} (\texttt{n\_trials=50}), usando OOF RMSE em validação cruzada
+de 5 folds como métrica. O espaço de busca cobre \texttt{iterations},
+\texttt{learning\_rate}, \texttt{depth}, \texttt{l2\_leaf\_reg}, \texttt{bagging\_temperature},
+\texttt{border\_count} e \texttt{random\_strength} (CatBoost), e os parâmetros análogos do
+LGB. Os parâmetros dos demais modelos (\texttt{cat\_b} a \texttt{cat\_e}, \texttt{xgb\_best}, \texttt{hgb})
+são fixos e cobrem regiões complementares do espaço de hipóteses, garantindo
+diversidade.
+\subsection{Validação Cruzada (10-fold, 3 repetições)}
+\label{sec:orge46a8cb}
+
+O treinamento dos base learners utiliza \texttt{RepeatedKFold} com 10 splits e
+\textbf{3 repetições} (\texttt{N\_REPEATS=3}, totalizando 30 folds), o que reduz a
+variância da estimativa OOF em \texttt{√3 ≈ 1,73×}.
+
+Para cada fold:
+
+\begin{enumerate}
+\item \texttt{SimpleImputer(median)} + \texttt{RobustScaler} aplicados \textbf{apenas nos dados de treino}.
+\item \texttt{TargetEncoder(smoothing=10)} ajustado \textbf{apenas nos dados de treino}.
+\item \texttt{PCA(n\_components=10)} sobre o bloco categórico \emph{encoded}.
+\item Concatenação: \texttt{[numérico\_escalado | cat\_encoded | PCA\_cat]}.
+\item Treinamento com early stopping (300 rounds para \texttt{CatBoost}, 200 para \texttt{LGB/XGB}).
+\end{enumerate}
+
+Este procedimento garante \textbf{zero data leakage} entre folds.
+\subsection{Nível 2 — Meta-Learners}
+\label{sec:org30e4ae5}
+
+Quatro estratégias de blending são treinadas sobre as predições OOF,
+enriquecidas com \textbf{features de 2ª ordem} (média, desvio-padrão, máximo, mínimo
+e amplitude entre os 8 modelos):
+
+\begin{center}
+\begin{tabular}{lrl}
+Meta-Learner & OOF RMSE & Notas\\
+\hline
+\texttt{RidgeCV} & 0.112582 & Treinado sobre features de 2ª ordem\\
+\texttt{ElasticNetCV} & 0.112599 & \$\(\alpha\)\$=0.00007, \$l\_1\$=0.90\\
+\texttt{LassoCV (+)} & 0.113698 & \texttt{positive=True}; pesos: cat\_c=0.35, cat\_e=0.68\\
+Optuna (direto) & 0.114212 & Busca \emph{simplex} sobre OOF base\\
+\end{tabular}
+\end{center}
+\subsection{Meta-Blending Final (Optuna)}
+\label{sec:org42197cc}
+
+Um segundo nível de Optuna combina os quatro meta-learners:
+
+\begin{verbatim}
+★ Pesos finais:
+  ridge        : 0.6167
+  elasticnet   : 0.3831
+  lasso_pos    : 0.0001
+  direct_opt   : 0.0001
+
+★ OOF RMSE FINAL: 0.112577
+\end{verbatim}
+\subsection{Pseudo-Labelling (2ª Passagem)}
+\label{sec:org9f3736d}
+
+Após o blending final, amostras de teste com baixa variância entre as
+predições dos 8 modelos (percentil 30 do desvio-padrão) são adicionadas ao
+conjunto de treino com suas labels previstas. O \emph{pipeline} completo é
+re-treinado sobre esse conjunto aumentado, e as predições finais são extraídas
+da 2ª passagem.
+
+\begin{verbatim}
+std_test  = test_matrix.std(axis=1)
+confident = std_test < np.percentile(std_test, 30)
+X_aug = pd.concat([X, X_test[confident]], ignore_index=True)
+y_aug = pd.concat([y, pd.Series(final_log[confident])], ignore_index=True)
+# → re-treino completo do CV loop sobre X_aug, y_aug
+\end{verbatim}
+\section{Pré-processamento \texttt{Inside-Fold}}
+\label{sec:org752206c}
+
+\begin{verbatim}
+Para cada fold k:
+  ┌─────────────────────────────────────────────────────────────────┐
+  │ X_train_k, X_val_k = split(X, fold=k)                           │
+  │                                                                 │
+  │ imputer.fit(X_train_k[num])   → X_train_num, X_val_num          │
+  │ scaler.fit(X_train_k[num])    → (RobustScaler)                  │
+  │                                                                 │
+  │ TargetEncoder.fit(X_train_k, y_train_k)                         │
+  │   → X_train_te, X_val_te, X_test_te                             │
+  │                                                                 │
+  │ PCA(10).fit(X_train_te)       → X_train_pca, X_val_pca          │
+  │                                                                 │
+  │ X_full = hstack[num | te | pca]                                 │
+  │                                                                 │
+  │ Para cada base model m:                                         │
+  │   model.fit(X_train_full, y_train, eval=(X_val_full, y_val))    │
+  │   oof[val_idx, m] += model.predict(X_val_full)                  │
+  │   test_preds[m]   += model.predict(X_test_full) / n_folds       │
+  └─────────────────────────────────────────────────────────────────┘
+\end{verbatim}
+\section{Resultados}
+\label{sec:org7ea2461}
+
+\subsection{RMSE por Base Learner (OOF, escala logarítmica)}
+\label{sec:orgf807026}
+
+\begin{center}
+\begin{tabular}{lr}
+Modelo & OOF RMSE\\
+\hline
+\texttt{cat\_e} & 0.114478\\
+\texttt{cat\_c} & 0.115069\\
+\texttt{cat\_a} & 0.115290\\
+\texttt{cat\_b} & 0.116325\\
+\texttt{cat\_d} & 0.117181\\
+\texttt{hgb} & 0.124021\\
+\texttt{lgb\_best} & 0.124906\\
+\texttt{xgb\_best} & 0.125658\\
+\end{tabular}
+\end{center}
+\subsection{Resultado Final}
+\label{sec:org4c007f7}
+
+\begin{center}
+\begin{tabular}{ll}
+Métrica & Valor\\
+\hline
+OOF RMSE (log) & \textbf{0.112577}\\
+Escala da predição & Preço em USD\\
+Range de predições & {[}46 419 , 569 716]\\
+Arquivo de submissão & \texttt{n-rosenthal-{}-{}submission-6.csv}\\
+\end{tabular}
+\end{center}
+\section{Conclusão}
+\label{sec:org3cdf2a8}
+
+O \emph{pipeline} implementado alcançou OOF RMSE de \textbf{0.112577} em escala log,
+correspondendo a um erro médio de aproximadamente ±12\% no preço de venda.
+
+Os principais fatores de sucesso foram:
+
+\begin{enumerate}
+\item \textbf{Engenharia de features cuidadosa}: 45 features derivadas de conhecimento
+do domínio imobiliário, com destaque para as interações \texttt{OverallQual × TotalSF}
+e os novos scores compostos (\texttt{ExterScore}, \texttt{FireScore}, \texttt{BsmtScore}).
+
+\item \textbf{Correção de tipos antes da separação de colunas}: converter \texttt{MSSubClass},
+\texttt{MoSold} e \texttt{YrSold} para \texttt{string} antes de definir \texttt{cat\_cols\textasciitilde{}/\textasciitilde{}num\_cols}
+evita que variáveis nominais sejam tratadas como contínuas.
+
+\item \textbf{Imputação semântica de \texttt{GarageYrBlt}}: usar \texttt{YearBuilt} em vez de \texttt{0}
+elimina um viés que confunde os modelos de boosting.
+
+\item \textbf{Target encoding dentro do fold}: eliminou \emph{data leakage} e permitiu
+capturar variações de preço por bairro (\texttt{Neighborhood}).
+
+\item \textbf{Diversidade no ensemble}: combinar CatBoost (cinco variantes com
+configurações distintas), LGB, XGB e HGB gerou ganho consistente sobre
+qualquer modelo individual.
+
+\item \textbf{Meta-blending via Optuna com features de 2ª ordem}: a adição de
+estatísticas (média, desvio, range) sobre as predições OOF enriqueceu
+o meta-learner; a combinação de Ridge e ElasticNet pesada pelo Optuna
+superou qualquer meta-learner isolado.
+
+\item \textbf{Pseudo-labelling com re-treino completo}: a 2ª passagem do CV loop sobre
+o conjunto aumentado com amostras de teste de alta confiança contribuiu
+para redução adicional do erro.
+\end{enumerate}
+\end{document}

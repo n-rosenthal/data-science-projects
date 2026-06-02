@@ -1,0 +1,862 @@
+:PROPERTIES:
+:ID:       7d6eb9de-87e2-4bff-994d-0be10791ba38
+:END:
+#+title: anotações para a resolução do laboratório
+#+author: Nícolas Rosenthal Dal Corso
+#+date: \date
+#+PROPERTY: header-args:python :session lab-5 :results output
+
+* Dificuldades e Erros
+[modelo /baseline/] (=n-rosenthal--submission-1=)
+    ->
+diversos modelos para testar e aprender técnicas avançadas
+    ->
+[modelo /stacking-ensemble 4/] (=n-rosenthal--submission-3=)
+
+
+No modelo /baseline/:
+1. Após definir um modelo /baseline/, percebi que tratei a coluna =Id= como outra coluna qualquer;
+2. Na primeira vez, eu defini duas estratégias de imputação de valores ausentes, uma depois da outra. Isto ocasionou uma /dupla imputação/. Isso não faz sentido nenhum.
+
+
+
+* Modelo /Baseline/
+** Pré-Processamento dos Dados: Limpeza
+*** Importação das Bibliotecas
+
+#+BEGIN_SRC python :session lab-5 :results silent
+import numpy as np
+import pandas as pd
+#+END_SRC
+
+*** Leitura dos Dados
+Ler os dados a partir de documento =.csv= e inspeção de sua dimensionalidade. Também vamos armazenar o numéro de colunas em uma variável de trabalho.
+
+#+BEGIN_SRC python :session lab-5 :results output
+train_df: pd.DataFrame = pd.read_csv(r"./lab05_files/lab05_files/train_student.csv");
+test_df: pd.DataFrame  = pd.read_csv(r"./lab05_files/lab05_files/test_student.csv");
+
+print("Dimensões:");
+print("\tdados de treinamento: ", train_df.shape);
+print("\tdados de teste      : ", test_df.shape);
+
+n_cols: int = test_df.shape[1];
+#+END_SRC
+
+#+RESULTS:
+: Dimensões:
+: 	dados de treinamento:  (1022, 81)
+: 	dados de teste      :  (438, 80)
+
+Nosso objetivo é, a partir das =81=  colunas, predizer o valor da coluna =SalesPrice=. É observável também que os dados de teste possuem uma coluna a mais do que os dados de treinamento.
+
+*** Diferença na Quantidade de Colunas
+#+BEGIN_SRC python :session lab-5 :results output
+train_cols = set(train_df.columns)
+test_cols  = set(test_df.columns)
+
+missing_in_test = train_cols - test_cols
+extra_in_test   = test_cols - train_cols
+
+print("Colunas em `train`, mas não em `test` :", end="")
+print(missing_in_test)
+print("\nColunas em `test`, mas não em `train` :", end="")
+print(extra_in_test)
+#+END_SRC
+
+#+RESULTS:
+: Colunas em `train`, mas não em `test` :{'SalePrice'}
+: 
+: Colunas em `test`, mas não em `train` :set()
+
+**** Natureza das Colunas
+Por inspeção visual dos dados, observamos que existem colunas /numéricas/ e colunas /categóricas/. Primeiro, vamos isolar a coluna que estamos interessados. Em seguida, vamos separar as colunas numéricas das colunas categóricas. É necessário verificar se estamos sendo capazes de extrair todas as colunas e se estamos seprando-as adequadamente.
+
+#+BEGIN_SRC python :session lab-5 :results output
+feature_cols = [col for col in test_df.columns if col != 'SalesPrice']  # test_df has no SalesPrice anyway
+
+numerical_cols = test_df[feature_cols].select_dtypes(include=['int64', 'float64']).columns
+categorical_cols = test_df[feature_cols].select_dtypes(include=['object', 'category']).columns
+
+n_cols_numerical = len(numerical_cols)
+n_cols_categorical = len(categorical_cols)
+
+print("colunas numéricas  : ", n_cols_numerical)
+print("colunas categóricas: ", n_cols_categorical)
+total = n_cols_numerical + n_cols_categorical
+print("total              : ", total, end="")
+print(" -> ", total == n_cols)   # n_cols = test_df.shape[1] = 80
+#+END_SRC
+
+#+RESULTS:
+: colunas numéricas  :  37
+: colunas categóricas:  43
+: total              :  80 ->  True
+
+Vamos primeiro analisar questões de limpeza dos dados para tanto colunas numéricas quanto categóricas. Em seguida, analisaremos os dois conjuntos separadamente e, quando formos propriamente treinar o modelo, reuniremos as colunas.
+
+É muito provável que existam /valores ausentes/ para algumas entradas. Vamos investigar:
+
+#+BEGIN_SRC python :session lab-5 :results output
+# treinamento
+missing_train = train_df.isnull().sum()
+missing_train = missing_train[missing_train > 0].sort_values(ascending=False)
+
+print("Valores ausentes nos dados de treinamento: ")
+print(missing_train)
+print(f"\ntotal: {missing_train.sum()}")
+
+# teste
+missing_test = test_df.isnull().sum()
+missing_test = missing_test[missing_test > 0].sort_values(ascending=False)
+
+print("\nValores ausentes nos dados de teste:")
+print(missing_test)
+print(f"\ntotal: {missing_test.sum()}")
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+Valores ausentes nos dados de treinamento: 
+PoolQC          1017
+MiscFeature      982
+Alley            956
+Fence            820
+MasVnrType       590
+FireplaceQu      487
+LotFrontage      190
+GarageType        54
+GarageYrBlt       54
+GarageFinish      54
+GarageQual        54
+GarageCond        54
+BsmtCond          26
+BsmtFinType1      26
+BsmtExposure      26
+BsmtQual          26
+BsmtFinType2      26
+MasVnrArea         3
+Electrical         1
+dtype: int64
+
+total: 5446
+
+Valores ausentes nos dados de teste:
+PoolQC          436
+MiscFeature     424
+Alley           413
+Fence           359
+MasVnrType      282
+FireplaceQu     203
+LotFrontage      69
+GarageType       27
+GarageFinish     27
+GarageQual       27
+GarageYrBlt      27
+GarageCond       27
+BsmtFinType2     12
+BsmtExposure     12
+BsmtCond         11
+BsmtFinType1     11
+BsmtQual         11
+MasVnrArea        5
+dtype: int64
+
+total: 2383
+#+end_example
+
+Muitos valores faltando, tanto em colunas categóricas quanto numéricas, e tanto para os dados teste quanto para os dados de treinamento. A resolução deverá ser aplicada para ambos conjuntos (=train, test=) de forma análoga.
+
+Existem algumas estratégias possíveis para lidar com este problema. Acaso uma coluna tenha mais do que cinquenta por cento de valores ausentes, será mesmo que ela é importante para a predição final?
+
+#+BEGIN_SRC python :session lab-5 :results output
+# Fazer uma cópia dos DataFrames para evitar perder valores
+cleaned_train_df: pd.DataFrame = train_df.copy();
+cleaned_test_df:  pd.DataFrame = test_df.copy();
+
+# Definir threshold para eliminar colunas (>= 50%)
+thresholds: list[float] = list(np.linspace(0.05, 0.99, num=20));
+print(thresholds);
+
+for threshold in thresholds:
+    kill_cols_train = cleaned_train_df.columns[cleaned_train_df.isnull().mean() > threshold];
+    kill_cols_test  = cleaned_test_df.columns[cleaned_test_df.isnull().mean() > threshold];
+    kill_cols: set = set(kill_cols_test) | set(kill_cols_train)
+
+    print("threshold `", threshold, "`\n\t ", list(kill_cols));
+
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+[np.float64(0.05), np.float64(0.09947368421052633), np.float64(0.14894736842105263), np.float64(0.19842105263157894), np.float64(0.24789473684210528), np.float64(0.29736842105263156), np.float64(0.3468421052631579), np.float64(0.3963157894736842), np.float64(0.4457894736842105), np.float64(0.49526315789473685), np.float64(0.5447368421052632), np.float64(0.5942105263157895), np.float64(0.6436842105263159), np.float64(0.6931578947368422), np.float64(0.7426315789473684), np.float64(0.7921052631578948), np.float64(0.8415789473684211), np.float64(0.8910526315789474), np.float64(0.9405263157894738), np.float64(0.99)]
+threshold ` 0.05 `
+	  ['MasVnrType', 'GarageYrBlt', 'GarageFinish', 'PoolQC', 'Fence', 'GarageQual', 'Alley', 'MiscFeature', 'LotFrontage', 'FireplaceQu', 'GarageType', 'GarageCond']
+threshold ` 0.09947368421052633 `
+	  ['MasVnrType', 'FireplaceQu', 'PoolQC', 'Fence', 'Alley', 'MiscFeature', 'LotFrontage']
+threshold ` 0.14894736842105263 `
+	  ['MasVnrType', 'FireplaceQu', 'PoolQC', 'Fence', 'Alley', 'MiscFeature', 'LotFrontage']
+threshold ` 0.19842105263157894 `
+	  ['MasVnrType', 'FireplaceQu', 'PoolQC', 'Fence', 'Alley', 'MiscFeature']
+threshold ` 0.24789473684210528 `
+	  ['MasVnrType', 'FireplaceQu', 'PoolQC', 'Fence', 'Alley', 'MiscFeature']
+threshold ` 0.29736842105263156 `
+	  ['MasVnrType', 'FireplaceQu', 'PoolQC', 'Fence', 'Alley', 'MiscFeature']
+threshold ` 0.3468421052631579 `
+	  ['MasVnrType', 'FireplaceQu', 'PoolQC', 'Fence', 'Alley', 'MiscFeature']
+threshold ` 0.3963157894736842 `
+	  ['MasVnrType', 'FireplaceQu', 'PoolQC', 'Fence', 'Alley', 'MiscFeature']
+threshold ` 0.4457894736842105 `
+	  ['MasVnrType', 'FireplaceQu', 'PoolQC', 'Fence', 'Alley', 'MiscFeature']
+threshold ` 0.49526315789473685 `
+	  ['MasVnrType', 'PoolQC', 'Fence', 'Alley', 'MiscFeature']
+threshold ` 0.5447368421052632 `
+	  ['MasVnrType', 'PoolQC', 'Fence', 'Alley', 'MiscFeature']
+threshold ` 0.5942105263157895 `
+	  ['MasVnrType', 'PoolQC', 'Fence', 'Alley', 'MiscFeature']
+threshold ` 0.6436842105263159 `
+	  ['MasVnrType', 'PoolQC', 'Fence', 'Alley', 'MiscFeature']
+threshold ` 0.6931578947368422 `
+	  ['PoolQC', 'Fence', 'Alley', 'MiscFeature']
+threshold ` 0.7426315789473684 `
+	  ['PoolQC', 'Fence', 'Alley', 'MiscFeature']
+threshold ` 0.7921052631578948 `
+	  ['PoolQC', 'Fence', 'Alley', 'MiscFeature']
+threshold ` 0.8415789473684211 `
+	  ['Alley', 'MiscFeature', 'PoolQC']
+threshold ` 0.8910526315789474 `
+	  ['Alley', 'MiscFeature', 'PoolQC']
+threshold ` 0.9405263157894738 `
+	  ['Alley', 'MiscFeature', 'PoolQC']
+threshold ` 0.99 `
+	  ['PoolQC']
+#+end_example
+
+Definimos um intervalo linear de $20$ valores entre =0.05= e =0.99= para os /thresholds/ de forma a mostrar quais colunas possuem valores faltando. Percebems que diveras colunas possuem pelo menos 5% dos valores ausentes: =['MasVnrType', 'GarageYrBlt', 'GarageFinish', 'PoolQC', 'Fence', 'GarageQual', 'Alley', 'MiscFeature', 'LotFrontage', 'FireplaceQu', 'GarageType', 'GarageCond']=; este é um intervalo baixo e não podemos decidir nossa análise sobre ele. O outro limite da nossa análise (=99%= dos valores ausentes) apresenta apenas a coluna =PoolQC=.
+
+Certamente não podemos esperar que uma coluna com valores ausentes para 99% das entradas seja importante para predição. Alguns thresholds interssantes são =0.25, 0.50, 0.75=:
+
+#+BEGIN_SRC python :session lab-5 :results output
+for threshold in [0.1, 0.25, 0.50, 0.75, 0.9]:
+    kill_cols_train = cleaned_train_df.columns[cleaned_train_df.isnull().mean() > threshold];
+    kill_cols_test  = cleaned_test_df.columns[cleaned_test_df.isnull().mean() > threshold];
+    kill_cols: set = set(kill_cols_test) | set(kill_cols_train)
+
+    print("threshold `", threshold, "`\n", "\t".join(list(kill_cols)));
+
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+threshold ` 0.1 `
+ MasVnrType	FireplaceQu	PoolQC	Fence	Alley	MiscFeature	LotFrontage
+threshold ` 0.25 `
+ MasVnrType	FireplaceQu	PoolQC	Fence	Alley	MiscFeature
+threshold ` 0.5 `
+ MasVnrType	PoolQC	Fence	Alley	MiscFeature
+threshold ` 0.75 `
+ PoolQC	Fence	Alley	MiscFeature
+threshold ` 0.9 `
+ Alley	MiscFeature	PoolQC
+#+end_example
+
+A decisão mais informada que tomamos é (1.) eliminar colunas com /muitos/ valores ausentes e (2.) decidir manualmente a partir de inspeção mais profunda, para colunas com quantidade intermediária de valores faltando.
+
+***** Eliminar Colunas com Muitos Valores Ausentes
+****** Decisão por coluna
+#+BEGIN_SRC python :session lab-5 :results output
+missing_ratio_train = train_df.isnull().mean().sort_values(ascending=False)
+missing_ratio_test  = test_df.isnull().mean()
+
+important_cols = ['MasVnrType', 'FireplaceQu', 'LotFrontage', 'GarageType']
+
+print("Razões de ausência (train) — top 10:")
+print(missing_ratio_train.head(10))
+print("\nColunas que parecem ser importantes:")
+for col in important_cols:
+    if col in missing_ratio_train.index:
+        print(f"{col}: train {missing_ratio_train[col]:.1%}, test {missing_ratio_test[col]:.1%}")
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+Razões de ausência (train) — top 10:
+PoolQC          0.995108
+MiscFeature     0.960861
+Alley           0.935421
+Fence           0.802348
+MasVnrType      0.577299
+FireplaceQu     0.476517
+LotFrontage     0.185910
+GarageQual      0.052838
+GarageFinish    0.052838
+GarageType      0.052838
+dtype: float64
+
+Colunas que parecem ser importantes:
+MasVnrType: train 57.7%, test 64.4%
+FireplaceQu: train 47.7%, test 46.3%
+LotFrontage: train 18.6%, test 15.8%
+GarageType: train 5.3%, test 6.2%
+#+end_example
+
+1. As colunas =PoolQC=, =MiscFeature= e =Alley= são altamente esparsas ($\geq 0.93$). Estas podem ser removidas sem detrimento à análise.
+2. =Fence= é nosso /threshold/ verdadeiro (=0.8=). A partir daqui, queremos que os valores ausentes sejam substituídos por uma categoria real (neste caso, ou =NoFence= ou =None= simplesmente).
+3. As colunas posteriores permancem, neste momento.
+
+****** Limpeza Propriamente Dita
+#+BEGIN_SRC python :session lab-5 :results silent
+cleaned_train = train_df.copy()
+cleaned_test = test_df.copy()
+
+# Colunas com muitos dados ausentes são eliminadas
+cols_to_drop = ['PoolQC', 'MiscFeature', 'Alley', 'Fence']
+cleaned_train = cleaned_train.drop(columns=cols_to_drop)
+cleaned_test = cleaned_test.drop(columns=cols_to_drop)
+#+END_SRC
+
+***** Preencher Colunas com Valores Ausentes
+Ainda existem algumas colunas com valores ausentes e precisamos que estes sejam preenchidos para podermos avançar para as próximas etapas. Abaixo, vamos analisar coluna-a-coluna
+#+BEGIN_SRC python :session lab-5 :results output
+# 1. Imputar valores ausentes em categorias com novas categorias
+cleaned_train['MasVnrType'] = cleaned_train['MasVnrType'].fillna('None')
+cleaned_test['MasVnrType'] = cleaned_test['MasVnrType'].fillna('None')
+
+cleaned_train['FireplaceQu'] = cleaned_train['FireplaceQu'].fillna('NoFireplace')
+cleaned_test['FireplaceQu'] = cleaned_test['FireplaceQu'].fillna('NoFireplace')
+
+# *Garagem*: se ausente, então o imóvel não tem gargem
+garage_cols = ['GarageType', 'GarageFinish', 'GarageQual', 'GarageCond']
+for col in garage_cols:
+    cleaned_train[col] = cleaned_train[col].fillna('NoGarage')
+    cleaned_test[col] = cleaned_test[col].fillna('NoGarage')
+
+# *Subsolo/Porão*: se ausente, não há subsolo
+basement_cols = ['BsmtQual', 'BsmtCond', 'BsmtExposure', 'BsmtFinType1', 'BsmtFinType2']
+for col in basement_cols:
+    cleaned_train[col] = cleaned_train[col].fillna('NoBasement')
+    cleaned_test[col] = cleaned_test[col].fillna('NoBasement')
+
+# 2. Imputação para valores numéricos: 0, mediana, moda
+# LotFrontage: mediana, a fim de evitar outliers
+#              alguns imóveis podem ter `Frontage` muito grande, ou nula
+median_lot = cleaned_train['LotFrontage'].median()
+cleaned_train['LotFrontage'] = cleaned_train['LotFrontage'].fillna(median_lot)
+cleaned_test['LotFrontage'] = cleaned_test['LotFrontage'].fillna(median_lot)
+
+# MasVnrArea: 0 (-> sem alvenaria)
+cleaned_train['MasVnrArea'] = cleaned_train['MasVnrArea'].fillna(0)
+cleaned_test['MasVnrArea'] = cleaned_test['MasVnrArea'].fillna(0)
+
+# GarageYrBlt: 0 (-> sem garagem)
+cleaned_train['GarageYrBlt'] = cleaned_train['GarageYrBlt'].fillna(0)
+cleaned_test['GarageYrBlt'] = cleaned_test['GarageYrBlt'].fillna(0)
+
+# Electrical: difícil entender o que isto significa
+#             -> moda, valor mais comum
+mode_elec = cleaned_train['Electrical'].mode()[0]
+cleaned_train['Electrical'] = cleaned_train['Electrical'].fillna(mode_elec)
+cleaned_test['Electrical'] = cleaned_test['Electrical'].fillna(mode_elec)
+
+# 3. Inspeção: ainda há valores faltando?
+print(f"Valores ausentes: train = {cleaned_train.isnull().sum().sum()}, test = {cleaned_test.isnull().sum().sum()}")
+if cleaned_train.isnull().sum().sum() == 0:
+    print("\tLimpeza completa, não há mais valores ausentes.")
+#+END_SRC    
+
+#+RESULTS:
+: Valores ausentes: train = 0, test = 0
+: 	Limpeza completa, não há mais valores ausentes.
+
+*** Pipeline para Pré-Processamento
+Agora que a análise manual foi feita, podemos *refatorar* o código acima para usar estratégias mais modernas com as /pipelines/ do =sklearn=. Isto é interessante porque
+1. é mais robusto e generalista;
+2. elimina /warnings/ do tipo =FutureWarning=; e
+3. faz uso das técnicas vigentes em Ciência de Dados.
+
+#+BEGIN_SRC python :session lab-out :results output
+import pandas as pd
+import numpy as np
+from sklearn.impute import SimpleImputer
+from sklearn.compose import ColumnTransformer
+
+# Carregar os dados
+train_df = pd.read_csv("./lab05_files/lab05_files/train_student.csv")
+test_df  = pd.read_csv("./lab05_files/lab05_files/test_student.csv")
+
+
+print("1. Dados carregados. Dimensões:", train_df.shape, test_df.shape)
+
+# Recomeçamos com cópias dos datasets iniciais
+cleaned_train = train_df.copy()
+cleaned_test = test_df.copy()
+
+# 1. Eliminaremos colunas com >= 0.8 valores ausentes
+cols_to_drop = ['PoolQC', 'MiscFeature', 'Alley', 'Fence']
+cleaned_train.drop(columns=cols_to_drop, inplace=True)
+cleaned_test.drop(columns=cols_to_drop, inplace=True)
+
+print("2. Eliminadas colunas com >= 0.8 valores ausentes.")
+
+
+# 2. Separar features (X) e target (y) para treinamento
+X_train = cleaned_train.drop('SalePrice', axis=1)
+y_train = cleaned_train['SalePrice']
+X_test = cleaned_test
+
+print(f"3. X_train dim.: {X_train.shape}")
+
+# 3. Converter MSSubClass para string (categórica) antes da imputação
+if 'MSSubClass' in X_train.columns:
+    X_train['MSSubClass'] = X_train['MSSubClass'].astype(str)
+    X_test['MSSubClass'] = X_test['MSSubClass'].astype(str)
+    print("4. coluna `MSSubClass` convertida para `str`")
+
+# 4. Definir colunas para imputação com zero (feature ausente = 0)
+zero_impute_cols = [
+    'MasVnrArea', 'GarageYrBlt', 'GarageCars', 'GarageArea',
+    'BsmtFinSF1', 'BsmtFinSF2', 'BsmtUnfSF', 'TotalBsmtSF',
+    'BsmtFullBath', 'BsmtHalfBath',
+    'Fireplaces', 'PoolArea'
+]
+zero_impute_cols = [c for c in zero_impute_cols if c in X_train.columns]
+print(f"5. Imputação de 0 para colunas numéricas com valores ausentes  ({len(zero_impute_cols)} colunas): {zero_impute_cols[:5]}...")
+
+# 5. Colunas numéricas que receberão mediana
+all_numerical = X_train.select_dtypes(include=['int64','float64']).columns.tolist()
+median_impute_cols = [c for c in all_numerical if c not in zero_impute_cols and c != 'SalePrice']
+print(f"6. Imputação da mediana para colunas numéricas ({len(median_impute_cols)} colunas): {median_impute_cols[:5]}...")
+
+# 6. Colunas categóricas
+categorical_cols = X_train.select_dtypes(include=['object','category']).columns.tolist()
+print(f"7. Colunas categóricas ({len(categorical_cols)}): {categorical_cols[:5]}...")
+
+# 7. Criar imputers
+num_imputer_median = SimpleImputer(strategy='median')
+num_imputer_zero   = SimpleImputer(strategy='constant', fill_value=0)
+cat_imputer        = SimpleImputer(strategy='constant', fill_value='Missing')
+
+# 8. ColumnTransformer
+preprocessor = ColumnTransformer([
+    ('median_impute', num_imputer_median, median_impute_cols),
+    ('zero_impute',   num_imputer_zero,   zero_impute_cols),
+    ('cat_impute',    cat_imputer,        categorical_cols)
+], remainder='passthrough')
+
+print("8. Pré-processamento das colunas pelos `SimpleImputer`s")
+X_train_imputed = preprocessor.fit_transform(X_train)
+X_test_imputed = preprocessor.transform(X_test)
+
+print("9. Imputação terminada.")
+
+# 10. Verificação
+print(f"X_train dim. após imputação: {X_train_imputed.shape}")
+print(f"X_test  dim. após imputação:  {X_test_imputed.shape}")
+print("Término da primeira fase do pré-processamento.")
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+1. Dados carregados. Dimensões: (1022, 81) (438, 80)
+2. Eliminadas colunas com >= 0.8 valores ausentes.
+3. X_train dim.: (1022, 76)
+4. coluna `MSSubClass` convertida para `str`
+5. Imputação de 0 para colunas numéricas com valores ausentes  (12 colunas): ['MasVnrArea', 'GarageYrBlt', 'GarageCars', 'GarageArea', 'BsmtFinSF1']...
+6. Imputação da mediana para colunas numéricas (24 colunas): ['Id', 'LotFrontage', 'LotArea', 'OverallQual', 'OverallCond']...
+7. Colunas categóricas (40): ['MSSubClass', 'MSZoning', 'Street', 'LotShape', 'LandContour']...
+8. Pré-processamento das colunas pelos `SimpleImputer`s
+9. Imputação terminada.
+X_train dim. após imputação: (1022, 76)
+X_test  dim. após imputação:  (438, 76)
+Término da primeira fase do pré-processamento.
+#+end_example
+
+**** Está Correto?
+Sim, está correto. O log mostra exatamente o que se espera:
+
+    Dimensões:
+
+        Treino: (1022, 76) - pois de 81 colunas originais, removeu 4 (PoolQC, MiscFeature, Alley, Fence) e removeu o target SalePrice → 81 - 4 - 1 = 76.
+
+        Teste: (438, 76) - removeu as mesmas 4 colunas (teste não tem SalePrice) → 80 - 4 = 76.
+
+    Divisão das colunas:
+
+        Zero-impute: 12 colunas (ex.: GarageYrBlt, MasVnrArea).
+
+        Mediana: 24 colunas (ex.: LotFrontage).
+
+        Categóricas: 40 colunas (incluindo MSSubClass convertida para string).
+
+        Total: 12 + 24 + 40 = 76 → consistente.
+
+    Não há valores ausentes após a imputação (o código que você mostrou não exibe mais np.isnan, então provavelmente removemos essa verificação que dava erro de tipo).
+
+Portanto, a primeira fase do pré-processamento (imputação) está perfeita.
+
+** Pré-Processamento dos Dados: /Encoding/ e /Scaling/
+Antes de produzir o modelo de regressão propriamente dito, ainda estamos interessados em duas estratégias para adequar os dados ao problema. Queremos /codificar/ (=encoding=) as colunas categóricas e /escalar/ (ou /normalizar/, *scaling*) as colunas numéricas.
+
+#+BEGIN_SRC python :session lab-out :results output
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+import pandas as pd
+import numpy as np
+
+# 1. Verificação das listas de colunas e os DataFrames do bloco anterior
+print("Colunas disponíveis :")
+print(f"  median_impute_cols:   {len(median_impute_cols)}")
+print(f"    zero_impute_cols:   {len(zero_impute_cols)}")
+print(f"    categorical_cols:   {len(categorical_cols)}")
+print(f"    total           :   {len(median_impute_cols) + len(zero_impute_cols) + len(categorical_cols)}")
+
+# 2. Construir os pipelines para cada grupo e o transf. de colunas
+numeric_median_pipe = Pipeline([
+    ('impute_median', SimpleImputer(strategy='median')),
+    ('scale', StandardScaler())
+])
+
+numeric_zero_pipe = Pipeline([
+    ('impute_zero', SimpleImputer(strategy='constant', fill_value=0)),
+    ('scale', StandardScaler())
+])
+
+categorical_pipe = Pipeline([
+    ('impute_missing', SimpleImputer(strategy='constant', fill_value='Missing')),
+    ('onehot', OneHotEncoder(handle_unknown='ignore', drop='first'))
+])
+
+# ColumnTransformer que aplica os três pipelines
+preprocessor_final = ColumnTransformer([
+    ('num_median', numeric_median_pipe, median_impute_cols),
+    ('num_zero',   numeric_zero_pipe,   zero_impute_cols),
+    ('cat',        categorical_pipe,    categorical_cols)
+])
+
+print("-" * 26);
+print(preprocessor_final);
+
+# 3. Transformar os dados
+X_train_transformed = preprocessor_final.fit_transform(X_train, y_train)
+
+print(X_train_transformed);
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+Colunas disponíveis :
+  median_impute_cols:   24
+    zero_impute_cols:   12
+    categorical_cols:   40
+    total           :   76
+--------------------------
+ColumnTransformer(transformers=[('num_median',
+                                 Pipeline(steps=[('impute_median',
+                                                  SimpleImputer(strategy='median')),
+                                                 ('scale', StandardScaler())]),
+                                 ['Id', 'LotFrontage', 'LotArea', 'OverallQual',
+                                  'OverallCond', 'YearBuilt', 'YearRemodAdd',
+                                  '1stFlrSF', '2ndFlrSF', 'LowQualFinSF',
+                                  'GrLivArea', 'FullBath', 'HalfBath',
+                                  'BedroomAbvGr', 'KitchenAbvGr',
+                                  'TotRmsAbvGrd', 'WoodDe...
+                                 ['MSSubClass', 'MSZoning', 'Street',
+                                  'LotShape', 'LandContour', 'Utilities',
+                                  'LotConfig', 'LandSlope', 'Neighborhood',
+                                  'Condition1', 'Condition2', 'BldgType',
+                                  'HouseStyle', 'RoofStyle', 'RoofMatl',
+                                  'Exterior1st', 'Exterior2nd', 'MasVnrType',
+                                  'ExterQual', 'ExterCond', 'Foundation',
+                                  'BsmtQual', 'BsmtCond', 'BsmtExposure',
+                                  'BsmtFinType1', 'BsmtFinType2', 'Heating',
+                                  'HeatingQC', 'CentralAir', 'Electrical', ...])])
+<Compressed Sparse Row sparse matrix of dtype 'float64'
+	with 72222 stored elements and shape (1022, 256)>
+  Coords	Values
+  (0, 0)	-1.4010002194522344
+  (0, 1)	0.42105530675622643
+  (0, 2)	-0.030504326934116557
+  (0, 3)	0.6360306899404667
+  (0, 4)	0.39226602307074837
+  (0, 5)	-0.03237831432095405
+  (0, 6)	-0.7116443921195715
+  (0, 7)	1.315652302523794
+  (0, 8)	-0.8022940572937826
+  (0, 9)	-0.12031324912961958
+  (0, 10)	0.2878347334783199
+  (0, 11)	0.7678403213813123
+  (0, 12)	-0.7585169740083605
+  (0, 13)	0.13517503373888548
+  (0, 14)	-0.21231774308963808
+  (0, 15)	0.27923395644884813
+  (0, 16)	0.0034269173725175444
+  (0, 17)	-0.7159741995831473
+  (0, 18)	-0.34637152309704494
+  (0, 19)	-0.1193172617185024
+  (0, 20)	-0.2758963952862536
+  (0, 21)	-0.12298707010850735
+  (0, 22)	-0.5149436790713383
+  (0, 23)	0.1402926736602034
+  (0, 24)	1.0613724844923493
+  :	:
+  (1021, 118)	1.0
+  (1021, 121)	1.0
+  (1021, 137)	1.0
+  (1021, 152)	1.0
+  (1021, 155)	1.0
+  (1021, 159)	1.0
+  (1021, 164)	1.0
+  (1021, 166)	1.0
+  (1021, 171)	1.0
+  (1021, 177)	1.0
+  (1021, 181)	1.0
+  (1021, 187)	1.0
+  (1021, 193)	1.0
+  (1021, 194)	1.0
+  (1021, 203)	1.0
+  (1021, 207)	1.0
+  (1021, 209)	1.0
+  (1021, 216)	1.0
+  (1021, 221)	1.0
+  (1021, 222)	1.0
+  (1021, 235)	1.0
+  (1021, 240)	1.0
+  (1021, 242)	1.0
+  (1021, 250)	1.0
+  (1021, 254)	1.0
+#+end_example
+
+** Definição do Modelo de Regressão Linear e Treinamento
+A definição do modelo /baseline/ é bastante simples, tratando-se apenas de regressão linear conforme disponibilizado pelo =sklearn=:
+
+#+BEGIN_SRC python :session lab-out :results output
+model = LinearRegression()
+
+# Usando log-transform no target
+y_train_log = np.log1p(y_train)
+
+model.fit(X_train_transformed, y_train_log)
+#+END_SRC
+
+** Avaliação do Modelo /Baseline/
+
+#+BEGIN_SRC python :session lab-out :results output
+y_pred_log = model.predict(X_train_transformed)
+y_pred = np.expm1(y_pred_log)
+
+rmse = np.sqrt(mean_squared_error(y_train, y_pred))
+mae  = mean_absolute_error(y_train, y_pred)
+r2   = r2_score(y_train, y_pred)
+rmse_log = np.sqrt(mean_squared_error(y_train_log, y_pred_log))
+
+print("-" * 30)
+print("11. Métricas no treino:")
+print(f"RMSE (log): {rmse_log:.5f}")
+print(f"RMSE: {rmse:.4f}")
+print(f"MAE:  {mae:.4f}")
+print(f"R²:   {r2:.4f}")
+
+from sklearn.model_selection import cross_val_score
+
+scores = -cross_val_score(
+    model,
+    X_train_transformed,
+    y_train_log,
+    scoring="neg_root_mean_squared_error",
+    cv=5
+)
+
+print(f"CV RMSE (log): {scores.mean():.5f} ± {scores.std():.5f}")
+
+y_test_pred_log = model.predict(X_test_transformed)
+y_test_pred = np.expm1(y_test_pred_log)
+
+print("12. Predições no conjunto de teste concluídas.")
+
+submission = pd.DataFrame({
+    "Id": test_df["Id"],
+    "prediction": y_test_pred
+})
+
+submission.to_csv("submission.csv", index=False)
+#+END_SRC
+
+*** Resultados do Modelo /Baseline/
+Métricas no treino:
+- RMSE (log): 0.08926
+- RMSE: 17406.9043
+- MAE:  10889.9244
+- R²:   0.9497
+- CV RMSE (log): 0.18788 ± 0.05491
+
+Em relação ao teste real, RMSE(log) ~= 0.23
+
+* Modelo =stacking-ensemble 4=
+:PROPERTIES:
+:ID:       41bc175f-461d-4785-b1b3-39b2a5021acb
+:END:
+=stacking-ensemble 4= é um *stacking ensemble* de dois níveis: cinco modelos de gradient boosting como camada base e um blend de RidgeCV + ElasticNet como meta-modelo.
+
+
+** Pré-processamento
+*** Remoção de Outliers
+Antes de qualquer modelagem, quatro filtros são aplicados ao conjunto de treino para eliminar observações atípicas que distorceriam o aprendizado:
+
+#+begin_src python
+train_df = train_df[train_df["GrLivArea"] < 4500]
+train_df = train_df[~((train_df["GrLivArea"] > 4000) & (train_df["SalePrice"] < 200000))]
+train_df = train_df[train_df["LotArea"] < 100000]
+train_df = train_df[train_df["TotalBsmtSF"] < 6000]
+#+end_src
+
+O segundo filtro é especialmente importante: remove casas grandes =vendidas= a preço baixo, que são anomalias conhecidas do dataset Ames e prejudicam modelos de árvore.
+
+*** Transformação da Variável Alvo
+
+O target =SalePrice= é transformado com =log1p= antes do treino:
+
+#+begin_src python
+y = np.log1p(train_df["SalePrice"])
+#+end_src
+
+Isso aproxima a distribuição da normal, reduz a influência de valores extremos e é o formato esperado na submissão — as predições são entregues em escala logarítmica, sem reverter com =expm1=.
+
+*** Imputação Contextual
+Em vez de imputação genérica por mediana, os valores ausentes são tratados com base no domínio do problema:
+
+- *Categóricas de ausência semântica* (ex: ~GarageType~, ~PoolQC~): NaN
+significa que o imóvel não possui aquela característica, portanto preenchidos com a string ~"None"~.
+
+- *Numéricas de área ou contagem* (ex: ~GarageArea~, ~BsmtFinSF1~):
+imóveis sem garagem ou porão têm área zero, portanto preenchidos com ~0~.
+
+- *Demais numéricas*: imputação por mediana dentro de cada fold de validação cruzada, usando ~SimpleImputer~.
+
+*** Feature Engineering
+A função =add_features= expande o conjunto original de 80 para 103 features, agrupadas em quatro categorias:
+
+**** Agregações de Área
+
+#+begin_src python
+df["TotalSF"]    = df["TotalBsmtSF"] + df["1stFlrSF"] + df["2ndFlrSF"]
+df["TotalPorchSF"] = df["OpenPorchSF"] + df["EnclosedPorch"] + ...
+df["TotalBathrooms"] = df["FullBath"] + 0.5*df["HalfBath"] + ...
+#+end_src
+
+Capturam a área utilizável total, que é mais preditiva que qualquer área individual.
+
+**** Flags Binárias de Presença
+
+#+begin_src python
+df["HasPool"]      = (df["PoolArea"] > 0).astype(int)
+df["HasGarage"]    = (df["GarageArea"] > 0).astype(int)
+df["HasBsmt"]      = (df["TotalBsmtSF"] > 0).astype(int)
+df["HasFireplace"] = (df["Fireplaces"] > 0).astype(int)
+df["IsRemodeled"]  = (df["YearRemodAdd"] != df["YearBuilt"]).astype(int)
+df["IsNew"]        = (df["YrSold"] == df["YearBuilt"]).astype(int)
+#+end_src
+
+Modelos de árvore beneficiam-se de splits binários explícitos quando a distinção presença/ausência é mais relevante que a magnitude.
+
+**** Interações Multiplicativas
+
+#+begin_src python
+df["OverallQual_TotalSF"]   = df["OverallQual"] * df["TotalSF"]
+df["OverallQual_GrLivArea"] = df["OverallQual"] * df["GrLivArea"]
+df["OverallQual_sq"]        = df["OverallQual"] ** 2
+df["QualCondScore"]         = df["OverallQual"] * df["OverallCond"]
+#+end_src
+
+=OverallQual= é a variável mais correlacionada com preço. Suas
+interações com área capturam o efeito não-linear de que qualidade
+importa proporcionalmente mais em casas grandes.
+
+**** Transformações Logarítmicas e Temporais
+
+#+begin_src python
+df["LotAreaLog"]  = np.log1p(df["LotArea"])
+df["GrLivAreaLog"]= np.log1p(df["GrLivArea"])
+df["HouseAge"]    = df["YrSold"] - df["YearBuilt"]
+df["RemodAge"]    = df["YrSold"] - df["YearRemodAdd"]
+#+end_src
+
+/Log-transforms/ reduzem a /skewness/ de variáveis de área, ajudando especialmente o meta-modelo linear. As features de idade capturam depreciação e o efeito de reformas recentes.
+
+** Encoding de Variáveis Categóricas
+
+As 44 variáveis categóricas são transformadas com *Target Encoding* dentro de cada fold:
+
+#+begin_src python
+enc = ce.TargetEncoder(cols=cat_cols, smoothing=10)
+enc.fit(X_tr, y_tr)
+#+end_src
+
+O parâmetro =smoothing=10= é crítico: mistura a média da categoria com a média global proporcionalmente ao tamanho da categoria, evitando /data leakage/ em categorias raras. O valor 10 (versus 0.3 do baseline) reduz significativamente o /overfitting/ do /encoding/.
+
+O encoder é sempre /fitado/ apenas nos dados de treino do fold e aplicado em validação e teste, respeitando o isolamento de
+informação da validação cruzada.
+
+** Definição de Modelos Base
+Cinco modelos de /gradient boosting/ com hiperparâmetros distintos formam a camada base do /ensemble/. A diversidade entre eles é intencional para que erros não correlacionados se cancelam no stacking.
+
+| Modelo | =n_estimators= | =learning_rate= | =num_leaves=/=depth= | Característica          |
+|--------+--------------+---------------+--------------------+-------------------------|
+| LGB1   | 6000         | 0.005         | 31                 | Conservador, balanceado |
+| LGB2   | 8000         | 0.003         | 15                 | Raso, muito regularizado|
+| LGB3   | 5000         | 0.008         | 63                 | Muitas folhas, agressivo|
+| Cat    | 5000         | 0.007         | 6                  | Melhor OOF individual   |
+| XGB    | 5000         | 0.005         | 5                  | Complementa LGB/Cat     |
+
+OOF RMSE individuais (seed 42):
+- LGB1: 0.126874
+- LGB2: 0.123090
+- LGB3: 0.119819
+- CatBoost: *0.116575* (melhor)
+- XGBoost: 0.125426
+
+** Validação Cruzada (Out-of-Fold)
+
+#+begin_src python
+kf = KFold(n_splits=10, shuffle=True, random_state=42)
+#+end_src
+
+10 folds foram utilizados em vez dos 5 do baseline por dois motivos: cada modelo é avaliado em 10 conjuntos distintos, reduzindo a variância da estimativa de RMSE; e cada modelo de treino usa 90% dos dados em vez de 80%, gerando predições mais fortes.
+
+As predições /Out-of-Fold/ (OOF) são usadas como features para o meta-modelo, garantindo que o meta-modelo nunca veja predições feitas sobre dados em que o modelo base foi treinado.
+
+** Meta-Modelo (/Stacking/)
+As predições OOF dos cinco modelos base formam uma matriz de entrada para dois meta-modelos:
+
+#+begin_src python
+# Meta 1
+meta_ridge = RidgeCV(alphas=np.logspace(-4, 2, 50), cv=10)
+meta_ridge.fit(X_meta, y)   # RMSE: 0.113588
+
+# Meta 2
+meta_en = ElasticNet(alpha=0.0003, l1_ratio=0.5, max_iter=50000)
+meta_en.fit(X_meta, y)      # RMSE: 0.114635
+
+# Blend final (50/50)
+final = 0.5 * meta_ridge.predict(...) + 0.5 * meta_en.predict(...)
+# RMSE: 0.113965
+#+end_src
+
+=RidgeCV= seleciona automaticamente o melhor =alpha= entre 50 valores via /cross-validation/ interna. O /blend/ 50/50 com =ElasticNet= reduz ligeiramente a variância da predição final em relação a usar apenas um dos dois.
+
+** Resultados para o Modelo =stacking-ensemble 4=
+- OOF RMSE FINAL (blend meta):  0.113965
+- OOF RMSE FINAL (média direta): 0.119427
+
+*** Decisões de Design para o Modelo =stacking-ensemble 4=
+| Decisão                        | Alternativa descartada        | Motivo                                      |
+|--------------------------------+-------------------------------+---------------------------------------------|
+| Imputação contextual por domínio | Mediana global               | NaN em GarageArea significa 0, não mediana  |
+| RobustScaler                   | StandardScaler                | Mais estável com outliers remanescentes      |
+| TargetEncoding smoothing=10    | smoothing=0.3                 | Menos leakage em categorias raras           |
+| 10-fold CV                     | 5-fold                        | Menor variância, mais dados por treino      |
+| 5 modelos heterogêneos         | Apenas LightGBM               | Erros não correlacionados melhoram o blend  |
+| RidgeCV como meta              | ElasticNet puro               | Seleção automática de alpha, mais estável   |
+| Predição em log scale          | ~expm1~ antes de submeter     | Formato exigido pela competição             |

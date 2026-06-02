@@ -1,0 +1,12 @@
+,customer_id,name,age,city,income,signup_date,purchases,gender,segment
+0,101,Ana,25.0,Porto Alegre,4200.0,2024-01-10,3.0,F,Basic
+1,102,Bruno,31.0,Porto Alegre,5100.0,2024-02-15,5.0,M,Basic
+2,103,Carla,28.5,São Paulo,7900.0,2024-03-15,7.0,F,Premium
+3,104,Daniel,29.0,Rio de Janeiro,5100.0,2024-04-01,2.0,M,Basic
+4,105,Eva,28.5,Rio de Janeiro,6100.0,,4.0,F,Premium
+5,106,Desconhecido,41.0,Curitiba,5800.0,,3.0,M,Basic
+6,107,Gustavo,28.5,Curitiba,4700.0,2024-06-20,1.0,M,Basic
+7,108,Helena,36.0,Desconhecido,230631.99999999997,2024-07-01,30.0,F,Premium
+8,109,Igor,28.0,Porto Alegre,5100.0,,2.0,M,Basic
+9,110,Julia,28.0,São Paulo,4300.0,2024-08-10,3.0,F,Basic
+10,111,Julia,28.0,São Paulo,4300.0,2024-08-10,3.0,F,Basic

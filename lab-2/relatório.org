@@ -1,0 +1,75 @@
+#+TITLE: Laboratório 2: Limpeza e Transformação de Dados
+#+AUTHOR: Nícolas Rosenthal Dal Corso
+#+DATE: \today
+
+#+LATEX: \newpage
+* Introdução
+O objetivo deste trabalho foi transformar um dataset com problemas de qualidade em um conjunto de dados limpo, consistente e adequado para análise.
+
+O dataset original apresentava problemas típicos de dados reais, incluindo:
+- valores duplicados
+- inconsistência em texto (nomes e categorias)
+- idades inválidas
+- valores ausentes
+- possíveis outliers em renda
+
+* Inspeção Inicial
+A análise inicial mostrou:
+- duplicatas exatas (ex: registros repetidos de clientes)
+- nomes com capitalização inconsistente (ex: "carla")
+- idades inválidas (ex: 200 anos)
+- possíveis inconsistências em categorias como cidade e gênero
+
+* Etapas de Limpeza
+
+** Remoção de Duplicatas
+Registros duplicados foram removidos para evitar viés estatístico.
+
+** Padronização de Texto
+As colunas textuais foram normalizadas:
+- nomes capitalizados corretamente
+- categorias padronizadas (ex: gênero e cidade)
+
+** Tratamento de Idades Inválidas
+Idades irreais (ex: > 100 ou negativas) foram substituídas por valores ausentes (NaN), evitando distorções na análise.
+
+** Conversão e Padronização de Datas
+A coluna =signup_date= foi convertida para formato datetime, tratando múltiplos formatos de entrada.
+
+** Tratamento de Valores Ausentes
+Foi adotada a seguinte estratégia:
+- variáveis numéricas: preenchidas com a mediana
+- variáveis categóricas: preenchidas com "Desconhecido"
+
+* Transformações Realizadas
+
+Foram criadas novas variáveis para enriquecer o dataset:
+
+- =signup_month=: mês de cadastro extraído da data
+- =income_minmax=: normalização da renda (escala 0-1)
+- =income_log=: transformação logarítmica para reduzir assimetria
+- =segment_encoded=: codificação numérica da variável categórica
+- =purchases_per_age=: razão entre compras e idade
+- =income_per_purchase=: renda média por compra
+
+Além disso, a variável categórica =city= foi transformada usando one-hot encoding, gerando colunas como:
+- city_Porto Alegre
+- city_São Paulo
+- city_Rio de Janeiro
+- city_Curitiba
+- city_Desconhecido
+
+* Outliers
+Foi identificado um valor de renda potencialmente extremo.
+
+Optou-se por manter o valor, aplicando transformação logarítmica (=income_log=), pois:
+- a remoção poderia descartar informação relevante
+- a transformação reduz o impacto do outlier sem perder o dado
+
+* Dataset Final
+O dataset final contém:
+- dados limpos e consistentes
+- variáveis transformadas relevantes
+- codificação adequada para modelos de machine learning
+
+O conjunto final possui 21 colunas, incluindo variáveis derivadas e codificadas.

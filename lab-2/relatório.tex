@@ -1,0 +1,115 @@
+% Created 2026-04-09 qui 10:46
+% Intended LaTeX compiler: xelatex
+\documentclass[11pt]{article}
+\usepackage{graphicx}
+\usepackage{longtable}
+\usepackage{wrapfig}
+\usepackage{rotating}
+\usepackage[normalem]{ulem}
+\usepackage{capt-of}
+\usepackage{hyperref}
+\author{Nícolas Rosenthal Dal Corso}
+\date{\today}
+\title{Laboratório 2: Limpeza e Transformação de Dados}
+\hypersetup{
+ pdfauthor={Nícolas Rosenthal Dal Corso},
+ pdftitle={Laboratório 2: Limpeza e Transformação de Dados},
+ pdfkeywords={},
+ pdfsubject={},
+ pdfcreator={Emacs 30.2 (Org mode 9.7.11)}, 
+ pdflang={English}}
+\begin{document}
+
+\maketitle
+\tableofcontents
+
+\newpage
+\section{Introdução}
+\label{sec:org3dd683a}
+O objetivo deste trabalho foi transformar um dataset com problemas de qualidade em um conjunto de dados limpo, consistente e adequado para análise.
+
+O dataset original apresentava problemas típicos de dados reais, incluindo:
+\begin{itemize}
+\item valores duplicados
+\item inconsistência em texto (nomes e categorias)
+\item idades inválidas
+\item valores ausentes
+\item possíveis outliers em renda
+\end{itemize}
+\section{Inspeção Inicial}
+\label{sec:orgb004d26}
+A análise inicial mostrou:
+\begin{itemize}
+\item duplicatas exatas (ex: registros repetidos de clientes)
+\item nomes com capitalização inconsistente (ex: "carla")
+\item idades inválidas (ex: 200 anos)
+\item possíveis inconsistências em categorias como cidade e gênero
+\end{itemize}
+\section{Etapas de Limpeza}
+\label{sec:orgd5a4fee}
+
+\subsection{Remoção de Duplicatas}
+\label{sec:orgb5b4b41}
+Registros duplicados foram removidos para evitar viés estatístico.
+\subsection{Padronização de Texto}
+\label{sec:orgf04be0b}
+As colunas textuais foram normalizadas:
+\begin{itemize}
+\item nomes capitalizados corretamente
+\item categorias padronizadas (ex: gênero e cidade)
+\end{itemize}
+\subsection{Tratamento de Idades Inválidas}
+\label{sec:org58a527d}
+Idades irreais (ex: > 100 ou negativas) foram substituídas por valores ausentes (NaN), evitando distorções na análise.
+\subsection{Conversão e Padronização de Datas}
+\label{sec:org24658e5}
+A coluna \texttt{signup\_date} foi convertida para formato datetime, tratando múltiplos formatos de entrada.
+\subsection{Tratamento de Valores Ausentes}
+\label{sec:orgd3fdc56}
+Foi adotada a seguinte estratégia:
+\begin{itemize}
+\item variáveis numéricas: preenchidas com a mediana
+\item variáveis categóricas: preenchidas com "Desconhecido"
+\end{itemize}
+\section{Transformações Realizadas}
+\label{sec:org6e8c689}
+
+Foram criadas novas variáveis para enriquecer o dataset:
+
+\begin{itemize}
+\item \texttt{signup\_month}: mês de cadastro extraído da data
+\item \texttt{income\_minmax}: normalização da renda (escala 0-1)
+\item \texttt{income\_log}: transformação logarítmica para reduzir assimetria
+\item \texttt{segment\_encoded}: codificação numérica da variável categórica
+\item \texttt{purchases\_per\_age}: razão entre compras e idade
+\item \texttt{income\_per\_purchase}: renda média por compra
+\end{itemize}
+
+Além disso, a variável categórica \texttt{city} foi transformada usando one-hot encoding, gerando colunas como:
+\begin{itemize}
+\item city\_Porto Alegre
+\item city\_São Paulo
+\item city\_Rio de Janeiro
+\item city\_Curitiba
+\item city\_Desconhecido
+\end{itemize}
+\section{Outliers}
+\label{sec:orgca111cc}
+Foi identificado um valor de renda potencialmente extremo.
+
+Optou-se por manter o valor, aplicando transformação logarítmica (\texttt{income\_log}), pois:
+\begin{itemize}
+\item a remoção poderia descartar informação relevante
+\item a transformação reduz o impacto do outlier sem perder o dado
+\end{itemize}
+\section{Dataset Final}
+\label{sec:org5ccc57a}
+O dataset final contém:
+\begin{itemize}
+\item dados limpos e consistentes
+\item variáveis transformadas relevantes
+\item codificação adequada para modelos de machine learning
+\end{itemize}
+
+O conjunto final possui 21 colunas, incluindo variáveis derivadas e codificadas.
+\end{document}
