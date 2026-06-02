@@ -1,0 +1,7 @@
+#+title: README \and projeto web-scrappers/moodle-course-scrapper
+#+author: nrdc
+
+* sobre o projeto
+=moodle-course-scrapper= (=mc-scrapper=) é um /scrapper/ para páginas de cursos da plataforma [Moodle](...), escrito em Python//Playwright. Este projeto está sendo implementado para (1) integração com outros módulos da minha configuração do =Emacs=, e (2) para melhor gerenciamento dos meus cursos acadêmicos no Moodle.
+
+* execução
