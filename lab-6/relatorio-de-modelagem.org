@@ -1,0 +1,251 @@
+:PROPERTIES:
+:ID:       846c3e09-545c-4814-b063-2aaed557cb5a
+:END:
+#+title: Laboratório 6 - Relatório
+#+author: Nícolas Rosenthal Dal Corso
+#+options: toc:2 num:t
+#+LANGUAGE: pt-br
+#+PROPERTY: header-args: R :session *R* :results output :exports both
+
+# Exportação
+#+OPTIONS: toc:3 num:t H:4 ':t ^:nil todo:nil tags:nil
+
+# Classe e pacotes LaTeX
+#+LATEX_CLASS: article
+#+LATEX_CLASS_OPTIONS: [12pt,a4paper]
+
+#+LATEX_HEADER: \usepackage[T1]{fontenc}
+#+LATEX_HEADER: \usepackage[utf8]{inputenc}
+#+LATEX_HEADER: \usepackage[brazil]{babel}
+
+# Margens
+#+LATEX_HEADER: \usepackage[top=2.5cm,bottom=2.5cm,left=3cm,right=2.5cm]{geometry}
+
+# Tipografia
+#+LATEX_HEADER: \usepackage{lmodern}
+#+LATEX_HEADER: \usepackage{microtype}
+
+# Código-fonte com destaque de sintaxe
+#+LATEX_HEADER: \usepackage{minted}
+#+LATEX_HEADER: \setminted{fontsize=\small, linenos=false, breaklines=true, bgcolor=gray!6}
+
+# Hiperlinks (deve vir por último entre os pacotes de formatação)
+#+LATEX_HEADER: \usepackage[colorlinks=true, linkcolor=black, urlcolor=blue, citecolor=black]{hyperref}
+
+# Cabeçalho e rodapé
+#+LATEX_HEADER: \usepackage{fancyhdr}
+#+LATEX_HEADER: \pagestyle{fancy}
+#+LATEX_HEADER: \fancyhf{}
+#+LATEX_HEADER: \fancyhead[L]{\small Ciência de Dados - Laboratório 6}
+#+LATEX_HEADER: \fancyhead[R]{\small Relatório de Modelagem}
+#+LATEX_HEADER: \fancyfoot[C]{\thepage}
+#+LATEX_HEADER: \renewcommand{\headrulewidth}{0.4pt}
+
+# Espaçamento entre linhas
+#+LATEX_HEADER: \usepackage{setspace}
+#+LATEX_HEADER: \setstretch{1.15}
+
+# Blocos de código não-minted (BEGIN_EXAMPLE, BEGIN_SRC sem minted)
+#+LATEX_HEADER: \usepackage{fancyvrb}
+
+#  Mapeamento de ambientes src → minted
+#+LATEX_HEADER: \usepackage{etoolbox}
+
+#  Configuração do exportador
+# Usar minted no lugar do verbatim padrão para blocos #+BEGIN_SRC
+#+LATEX_HEADER_EXTRA: \AtBeginDocument{\setlength{\parskip}{4pt}}
+
+# formatação de blocos de exemplo
+#+latex_header: \usepackage{fancyvrb}
+#+latex_header: \DefineVerbatimEnvironment{Highlighting}{Verbatim}{commandchars=\\\{\}, formatcom=\small\color{gray}, frame=single, framesep=5mm, rulecolor=\color{lightgray}}
+
+# destaque à sintaxe
+#+latex_header: \usepackage{minted}
+#+latex_header: \usepackage{xcolor}
+#+latex_header: \definecolor{lightgray}{gray}{0.95}
+#+latex_header: \setminted{style=vs, fontsize=\small, frame=single, bgcolor=lightgray}
+#+bind: org-latex-minted-options (("frame=single" "bgcolor=lightgray"))
+
+* Introdução
+
+Este relatório descreve o pipeline completo desenvolvido para o problema
+*Spaceship Titanic*, da plataforma Kaggle.
+
+O objetivo da competição consiste em prever se um passageiro foi
+transportado para outra dimensão, representado pelo predicado
+
+#+begin_example
+Transported ∈ {True, False}
+#+end_example
+
+Partindo da análise exploratória de dados e da engenharia de /features/ desenvolvida anteriormente, o pipeline implementado utiliza /ensemble stacking/ e otimização Bayesiana com Optuna; validação cruzada estratificada, otimização de /threshold/, e modelos /gradient boosting/ modernos (=CatBoost, LightGBM, XGBoost=)
+
+O foco principal do projeto foi maximizar desempenho preditivo, robustez estatística e capacidade de generalização.
+
+* Estrutura Geral do Pipeline
+O pipeline foi dividido em duas etapas principais:
+
+** Pré-processamento em R
+- EDA (/Exploratory Data Analysis/);
+- imputação de valores ausentes;
+- transformação de variáveis;
+- feature engineering;
+- normalização estrutural;
+- exportação dos /datasets/ processados.
+
+Arquivos gerados:
+
+#+begin_example
+data/processed/train_processed.csv
+data/processed/test_processed.csv
+#+end_example
+
+** Modelagem em Python
+- /encoding/ categórico;
+- otimização de hiperparâmetros;
+- treinamento dos modelos;
+- /stacking ensemble/;
+- avaliação;
+- geração da submissão final.
+
+* Pré-processamento e Engenharia de Features
+** Imputação de Valores Ausentes
+Os valores ausentes foram tratados em R utilizando regras heurísticas
+baseadas na análise exploratória.
+
+*** CryoSleep
+A /feature/ =CryoSleep= foi imputada utilizando a relação observada entre *ausência de gastos* e *estado criogênico*.
+
+*** VIP
+A variável =VIP= foi imputada utilizando distribuição empírica baseada em níveis elevados de gastos totais.
+
+*** Gastos
+Passageiros em criossono tiveram os gastos redefinidos para zero:
+
+- RoomService
+- FoodCourt
+- ShoppingMall
+- Spa
+- VRDeck
+
+** Engenharia de Features
+*** =Expenditure= e =NoExpenditure=
+
+Soma total dos gastos do passageiro:
+#+begin_example
+Expenditure =
+ RoomService +
+ FoodCourt +
+ ShoppingMall +
+ Spa +
+ VRDeck
+#+end_example
+
+*** =Cabin= /Features/
+A variável =Cabin= foi decomposta em =Cabin_Deck=, =Cabin_Number=, =Cabin_Side=
+
+*** =Passenger Groups=
+A partir de =PassengerId= foi criada a variável =Group= permitindo identificar passageiros viajando em conjunto.
+
+** Transformações Numéricas
+Foram avaliadas múltiplas transformações =log1p=, =sqrt=, =square= e =Yeo-Johnson=. As melhores transformações foram selecionadas via validação cruzada estratificada.
+
+* Pipeline de Modelagem
+** Estratégia Geral
+O modelo final utiliza /stacking ensemble/ segundo a arquitetura:
+
+#+begin_example
+Base Models
+    ↓
+Probabilidades Out-Of-Fold
+    ↓
+Meta Learner (Logistic Regression)
+    ↓
+Predição Final
+#+end_example
+
+* Encoding Categórico
+As variáveis categóricas foram codificadas utilizando /OrdinalEncoder/
+
+* Modelos Utilizados
+** CatBoost
+
+Modelo baseado em /gradient boosting/ com suporte nativo a variáveis categóricas.
+
+Características:
+- excelente desempenho tabular;
+- robustez contra /overfitting/;
+- alta capacidade de modelagem não-linear.
+
+** LightGBM
+/Gradient boosting/ baseado em árvores /histogram-based/.
+
+Características:
+- treinamento extremamente rápido;
+- alta escalabilidade;
+- excelente desempenho em /datasets/ tabulares.
+
+** XGBoost
+/Framework/ clássico de /gradient boosting/.
+
+Características:
+- regularização forte;
+- alta estabilidade;
+- ótimo desempenho em competições Kaggle.
+
+** ExtraTrees
+Modelo /ensemble/ baseado em árvores extremamente aleatórias.
+
+Características:
+- redução de variância;
+- complementaridade em relação aos modelos boosting.
+
+* Otimização Bayesiana com Optuna
+Os hiperparâmetros foram ajustados utilizando =Optuna= (/Bayesian Optimization/ + /Tree-structured Parzen Estimator/, /tree pruning/ e busca adaptativa de hiperparâmetros).
+
+* Validação Cruzada
+
+Foi utilizada /Stratified K-Fold Cross Validation/ com =k = 10= para reduzir variância, preservar distribuição da classe alvo e estimar generalização real do modelo.
+
+* /Ensemble Stacking/
+O ensemble final foi construído utilizando /StackingClassifier/
+
+#+begin_example
+CatBoost
+LightGBM
+XGBoost
+ExtraTrees
+    ↓
+Logistic Regression
+#+end_example
+
+O meta-modelo aprende a combinar as probabilidades dos modelos base.
+
+* Otimização de /Threshold/
+Ao invés do threshold padrão =0.5=, foi realizada busca exaustiva no intervalo =[0.30, 0.70]= para maximizar acurácia OOF e melhorar calibração das classes.
+
+* Métricas Utilizadas
+
+** Accuracy
+#+begin_example
+Accuracy =
+Predições corretas / Total
+#+end_example
+
+Métrica principal da competição: RMSE.
+
+** F1 Score
+Balanceia precisão e recall. Importante em casos de desbalanceamento.
+
+** ROC AUC
+Mede capacidade discriminativa probabilística.
+
+* Resultados
+O pipeline desenvolvido tipicamente obtém:
+
+| Modelo           | Acurácia Esperada |
+|------------------+-------------------|
+| CatBoost simples | [0.79, 0.81]      |
+| Ensemble básico  | [0.81, 0.82]      |
+| Stack + Optuna   | [0.82, 0.84]      |
+

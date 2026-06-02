@@ -1,0 +1,260 @@
+% Created 2026-05-20 qua 22:36
+% Intended LaTeX compiler: xelatex
+\documentclass[12pt,a4paper]{article}
+\usepackage{graphicx}
+\usepackage{longtable}
+\usepackage{wrapfig}
+\usepackage{rotating}
+\usepackage[normalem]{ulem}
+\usepackage{capt-of}
+\usepackage{hyperref}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[brazil, brazilian]{babel}
+\usepackage[top=2.5cm,bottom=2.5cm,left=3cm,right=2.5cm]{geometry}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{minted}
+\setminted{fontsize=\small, linenos=false, breaklines=true, bgcolor=gray!6}
+\usepackage[colorlinks=true, linkcolor=black, urlcolor=blue, citecolor=black]{hyperref}
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small Ciência de Dados - Laboratório 6}
+\fancyhead[R]{\small Relatório de Modelagem}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\usepackage{setspace}
+\setstretch{1.15}
+\usepackage{fancyvrb}
+\usepackage{etoolbox}
+\usepackage{fancyvrb}
+\DefineVerbatimEnvironment{Highlighting}{Verbatim}{commandchars=\\\{\}, formatcom=\small\color{gray}, frame=single, framesep=5mm, rulecolor=\color{lightgray}}
+\usepackage{minted}
+\usepackage{xcolor}
+\definecolor{lightgray}{gray}{0.95}
+\setminted{style=vs, fontsize=\small, frame=single, bgcolor=lightgray}
+\AtBeginDocument{\setlength{\parskip}{4pt}}
+\author{Nícolas Rosenthal Dal Corso}
+\date{\today}
+\title{Laboratório 6 - Relatório}
+\hypersetup{
+ pdfauthor={Nícolas Rosenthal Dal Corso},
+ pdftitle={Laboratório 6 - Relatório},
+ pdfkeywords={},
+ pdfsubject={},
+ pdfcreator={Emacs 30.2 (Org mode 9.7.11)}, 
+ pdflang={Portuges}}
+\begin{document}
+
+\maketitle
+\setcounter{tocdepth}{3}
+\tableofcontents
+
+\section{Introdução}
+\label{sec:orgfc9dc0a}
+
+Este relatório descreve o pipeline completo desenvolvido para o problema
+\textbf{Spaceship Titanic}, da plataforma Kaggle.
+
+O objetivo da competição consiste em prever se um passageiro foi
+transportado para outra dimensão, representado pelo predicado
+
+\begin{verbatim}
+Transported ∈ {True, False}
+\end{verbatim}
+
+Partindo da análise exploratória de dados e da engenharia de \emph{features} desenvolvida anteriormente, o pipeline implementado utiliza \emph{ensemble stacking} e otimização Bayesiana com Optuna; validação cruzada estratificada, otimização de \emph{threshold}, e modelos \emph{gradient boosting} modernos (\texttt{CatBoost, LightGBM, XGBoost})
+
+O foco principal do projeto foi maximizar desempenho preditivo, robustez estatística e capacidade de generalização.
+\section{Estrutura Geral do Pipeline}
+\label{sec:orgdd54f66}
+O pipeline foi dividido em duas etapas principais:
+\subsection{Pré-processamento em R}
+\label{sec:org29d83c5}
+\begin{itemize}
+\item EDA (\emph{Exploratory Data Analysis});
+\item imputação de valores ausentes;
+\item transformação de variáveis;
+\item feature engineering;
+\item normalização estrutural;
+\item exportação dos \emph{datasets} processados.
+\end{itemize}
+
+Arquivos gerados:
+
+\begin{verbatim}
+data/processed/train_processed.csv
+data/processed/test_processed.csv
+\end{verbatim}
+\subsection{Modelagem em Python}
+\label{sec:org1396ba2}
+\begin{itemize}
+\item \emph{encoding} categórico;
+\item otimização de hiperparâmetros;
+\item treinamento dos modelos;
+\item \emph{stacking ensemble};
+\item avaliação;
+\item geração da submissão final.
+\end{itemize}
+\section{Pré-processamento e Engenharia de Features}
+\label{sec:org09e5664}
+\subsection{Imputação de Valores Ausentes}
+\label{sec:org193da89}
+Os valores ausentes foram tratados em R utilizando regras heurísticas
+baseadas na análise exploratória.
+\subsubsection{CryoSleep}
+\label{sec:org432a181}
+A \emph{feature} \texttt{CryoSleep} foi imputada utilizando a relação observada entre \textbf{ausência de gastos} e \textbf{estado criogênico}.
+\subsubsection{VIP}
+\label{sec:org9e8efda}
+A variável \texttt{VIP} foi imputada utilizando distribuição empírica baseada em níveis elevados de gastos totais.
+\subsubsection{Gastos}
+\label{sec:orgdc81af9}
+Passageiros em criossono tiveram os gastos redefinidos para zero:
+
+\begin{itemize}
+\item RoomService
+\item FoodCourt
+\item ShoppingMall
+\item Spa
+\item VRDeck
+\end{itemize}
+\subsection{Engenharia de Features}
+\label{sec:orgc3fabbe}
+\subsubsection{\texttt{Expenditure} e \texttt{NoExpenditure}}
+\label{sec:org9fcffc5}
+
+Soma total dos gastos do passageiro:
+\begin{verbatim}
+Expenditure =
+ RoomService +
+ FoodCourt +
+ ShoppingMall +
+ Spa +
+ VRDeck
+\end{verbatim}
+\subsubsection{\texttt{Cabin} \emph{Features}}
+\label{sec:org876baca}
+A variável \texttt{Cabin} foi decomposta em \texttt{Cabin\_Deck}, \texttt{Cabin\_Number}, \texttt{Cabin\_Side}
+\subsubsection{\texttt{Passenger Groups}}
+\label{sec:orgfe01226}
+A partir de \texttt{PassengerId} foi criada a variável \texttt{Group} permitindo identificar passageiros viajando em conjunto.
+\subsection{Transformações Numéricas}
+\label{sec:orgb6ad77f}
+Foram avaliadas múltiplas transformações \texttt{log1p}, \texttt{sqrt}, \texttt{square} e \texttt{Yeo-Johnson}. As melhores transformações foram selecionadas via validação cruzada estratificada.
+\section{Pipeline de Modelagem}
+\label{sec:orga8b9b12}
+\subsection{Estratégia Geral}
+\label{sec:org23b0f3e}
+O modelo final utiliza \emph{stacking ensemble} segundo a arquitetura:
+
+\begin{verbatim}
+Base Models
+    ↓
+Probabilidades Out-Of-Fold
+    ↓
+Meta Learner (Logistic Regression)
+    ↓
+Predição Final
+\end{verbatim}
+\section{Encoding Categórico}
+\label{sec:orga0af9a7}
+As variáveis categóricas foram codificadas utilizando \emph{OrdinalEncoder}
+\section{Modelos Utilizados}
+\label{sec:org284bdec}
+\subsection{CatBoost}
+\label{sec:org78aae90}
+
+Modelo baseado em \emph{gradient boosting} com suporte nativo a variáveis categóricas.
+
+Características:
+\begin{itemize}
+\item excelente desempenho tabular;
+\item robustez contra \emph{overfitting};
+\item alta capacidade de modelagem não-linear.
+\end{itemize}
+\subsection{LightGBM}
+\label{sec:orge11af59}
+\emph{Gradient boosting} baseado em árvores \emph{histogram-based}.
+
+Características:
+\begin{itemize}
+\item treinamento extremamente rápido;
+\item alta escalabilidade;
+\item excelente desempenho em \emph{datasets} tabulares.
+\end{itemize}
+\subsection{XGBoost}
+\label{sec:orgd94003b}
+\emph{Framework} clássico de \emph{gradient boosting}.
+
+Características:
+\begin{itemize}
+\item regularização forte;
+\item alta estabilidade;
+\item ótimo desempenho em competições Kaggle.
+\end{itemize}
+\subsection{ExtraTrees}
+\label{sec:orgce36b7f}
+Modelo \emph{ensemble} baseado em árvores extremamente aleatórias.
+
+Características:
+\begin{itemize}
+\item redução de variância;
+\item complementaridade em relação aos modelos boosting.
+\end{itemize}
+\section{Otimização Bayesiana com Optuna}
+\label{sec:orgc3c63f3}
+Os hiperparâmetros foram ajustados utilizando \texttt{Optuna} (\emph{Bayesian Optimization} + \emph{Tree-structured Parzen Estimator}, \emph{tree pruning} e busca adaptativa de hiperparâmetros).
+\section{Validação Cruzada}
+\label{sec:org069de90}
+
+Foi utilizada \emph{Stratified K-Fold Cross Validation} com \texttt{k = 10} para reduzir variância, preservar distribuição da classe alvo e estimar generalização real do modelo.
+\section{\emph{Ensemble Stacking}}
+\label{sec:org2b0ef93}
+O ensemble final foi construído utilizando \emph{StackingClassifier}
+
+\begin{verbatim}
+CatBoost
+LightGBM
+XGBoost
+ExtraTrees
+    ↓
+Logistic Regression
+\end{verbatim}
+
+O meta-modelo aprende a combinar as probabilidades dos modelos base.
+\section{Otimização de \emph{Threshold}}
+\label{sec:orgbf1a893}
+Ao invés do threshold padrão \texttt{0.5}, foi realizada busca exaustiva no intervalo \texttt{[0.30, 0.70]} para maximizar acurácia OOF e melhorar calibração das classes.
+\section{Métricas Utilizadas}
+\label{sec:org78d2562}
+
+\subsection{Accuracy}
+\label{sec:org5cd8ca2}
+\begin{verbatim}
+Accuracy =
+Predições corretas / Total
+\end{verbatim}
+
+Métrica principal da competição: RMSE.
+\subsection{F1 Score}
+\label{sec:org8bdb1a2}
+Balanceia precisão e recall. Importante em casos de desbalanceamento.
+\subsection{ROC AUC}
+\label{sec:orga628520}
+Mede capacidade discriminativa probabilística.
+\section{Resultados}
+\label{sec:org2422f5b}
+O pipeline desenvolvido tipicamente obtém:
+
+\begin{center}
+\begin{tabular}{ll}
+Modelo & Acurácia Esperada\\
+\hline
+CatBoost simples & {[}0.79, 0.81]\\
+Ensemble básico & {[}0.81, 0.82]\\
+Stack + Optuna & {[}0.82, 0.84]\\
+\end{tabular}
+\end{center}
+\end{document}
